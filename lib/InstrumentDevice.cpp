@@ -173,11 +173,18 @@ struct InstrumentDevicePass : public ModulePass {
             kind = getPointerKind(load->getPointerOperand(), true);
           } else if (auto *store = dyn_cast<StoreInst>(&inst)) {
             kind = getPointerKind(store->getPointerOperand(), true);
-          } else if (auto *call = dyn_cast<CallInst>(&inst)) {
+          } else if (auto *atomic = dyn_cast<AtomicRMWInst>(&inst)) {
+            // ATOMIC Add/Sub/Exch/Min/Max/And/Or/Xor //
+            kind = getPointerKind(atomic->getPointerOperand(), true);
+	  } else if (auto *atomic = dyn_cast<AtomicCmpXchgInst>(&inst)) {
+            // ATOMIC CAS //
+            kind = getPointerKind(atomic->getPointerOperand(), true);
+	  } else if (auto *call = dyn_cast<CallInst>(&inst)) {
             Function* callee = call->getCalledFunction();
             if (callee == nullptr) continue;
             StringRef calleeName = callee->getName();
             if (calleeName.startswith("llvm.nvvm.atomic")) {
+	      // ATOMIC Inc/Dec //
               kind = getPointerKind(call->getArgOperand(0), true);
             } else if ( calleeName == "__mem_trace") {
               report_fatal_error("already instrumented!");
@@ -277,7 +284,18 @@ struct InstrumentDevicePass : public ModulePass {
           PtrOperand = si->getPointerOperand();
           LDesc = IRB.CreateOr(Desc, ((uint64_t)ACCESS_STORE << ACCESS_TYPE_SHIFT));
           StoreCounter++;
+        } else if (auto ai = dyn_cast<AtomicRMWInst>(inst)) {
+          // ATOMIC Add/Sub/Exch/Min/Max/And/Or/Xor //
+          PtrOperand = ai->getPointerOperand();
+          LDesc = IRB.CreateOr(Desc, ((uint64_t)ACCESS_ATOMIC << ACCESS_TYPE_SHIFT));
+          AtomicCounter++;
+	} else if (auto ai = dyn_cast<AtomicCmpXchgInst>(inst)) {
+          // ATOMIC CAS //
+          PtrOperand = ai->getPointerOperand();
+          LDesc = IRB.CreateOr(Desc, ((uint64_t)ACCESS_ATOMIC << ACCESS_TYPE_SHIFT));
+          AtomicCounter++;
         } else if (auto *FuncCall = dyn_cast<CallInst>(inst)) {
+          // ATOMIC Inc/Dec //
           assert(FuncCall->getCalledFunction()->getName()
               .startswith("llvm.nvvm.atomic"));
           PtrOperand = FuncCall->getArgOperand(0);
