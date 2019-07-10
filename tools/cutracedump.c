@@ -13,7 +13,7 @@
 } while(0)
 
 const char* ACC_TYPE_NAMES[] = {
-  "LD", "ST", "AT", "??"
+    "LD", "ST", "AT", "EXE", "RET"
 };
 
 void usage(const char* program_name) {
@@ -60,13 +60,23 @@ int main(int argc, char** argv) {
         continue;
       }
       if (r->count == 1) {
-        printf("  type: %s, addr: 0x%" PRIx64 ", size: %" PRIu32 ", cta: (%d, %d, %d), sm: %d\n",
-          ACC_TYPE_NAMES[r->type], r->addr, r->size,
-          r->ctaid.x, r->ctaid.y, r->ctaid.z, r->smid);
+        if (r->type != 3 && r->type != 4) ///////////////////////////
+	  printf("  type: %s, addr: 0x%" PRIx64 ", sm: %d, cta: (%2d,%2d,%2d), warp: %ld, size: %" PRIu32 "\n",
+		 ACC_TYPE_NAMES[r->type], r->addr, r->smid,
+	    r->ctaid.x, r->ctaid.y, r->ctaid.z, r->meta, r->size);
+	else
+	  printf("  type: %s, timer: %10" PRIu32 ", clock: %10" PRIu32 ", sm: %d, cta: (%2d,%2d,%2d), warp: %ld, size: %" PRIu32 "\n",
+		 ACC_TYPE_NAMES[r->type], (uint32_t)(r->addr >> 32), (uint32_t)(r->addr & 2147483647), r->smid,
+	    r->ctaid.x, r->ctaid.y, r->ctaid.z, r->meta, r->size);
       } else {
-        printf("  type: %s, start: 0x%" PRIx64 ", count: %" PRIu16 ", size: %" PRIu32 ", cta: (%d, %d, %d), sm: %d\n",
-          ACC_TYPE_NAMES[r->type], r->addr, r->count, r->size,
-          r->ctaid.x, r->ctaid.y, r->ctaid.z, r->smid);
+	  if (r->type != 3 && r->type != 4) /////////////////////////
+	  printf("  type: %s, addr: 0x%" PRIx64 ", sm: %d, cta: (%2d,%2d,%2d), warp: %ld, size: %" PRIu32 ", count: %" PRIu16 "\n",
+	    ACC_TYPE_NAMES[r->type], r->addr, r->smid,
+	    r->ctaid.x, r->ctaid.y, r->ctaid.z, r->meta, r->size, r->count);
+	else
+	  printf("  type: %s, timer: %10" PRIu32 ", clock: %10" PRIu32 ", sm: %d, cta: (%2d,%2d,%2d), warp: %ld, size: %" PRIu32 ", count: %" PRIu16 "\n",
+		 ACC_TYPE_NAMES[r->type], (uint32_t)(r->addr >> 32), (uint32_t)(r->addr & 2147483647), r->smid,
+		 r->ctaid.x, r->ctaid.y, r->ctaid.z, r->meta, r->size, r->count);
       }
     }
   }

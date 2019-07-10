@@ -3,6 +3,15 @@
 extern "C"
 __device__ void __mem_trace (uint8_t* records, uint8_t* allocs, uint8_t* commits,
         uint64_t desc, uint64_t addr, uint32_t slot) {
+
+    
+    uint32_t timer;
+    uint32_t clock;
+    asm volatile ("mov.u32 %0, %%clock;" : "=r"(clock));
+    asm volatile ("mov.u32 %0, %%globaltimer_lo;" : "=r"(timer));
+
+
+	
     uint64_t cta = blockIdx.x;
     cta <<= 16;
     cta |= blockIdx.y;
@@ -30,11 +39,20 @@ __device__ void __mem_trace (uint8_t* records, uint8_t* allocs, uint8_t* commits
     }
 
     uint32_t slot_offset = slot * SLOTS_SIZE;
-    uint32_t record_offset = __shfl(id, lowest) + rlane_id;
+    uint32_t record_offset = __shfl_sync(0xFFFFFFFF, id, lowest) + rlane_id;
     record_t *record = (record_t*) &(records[(slot_offset + record_offset) * RECORD_SIZE]);
+    uint32_t warp_id = threadIdx.x / 32;// = lane_id / 32; // how to calculate T/W ?
+    //asm volatile ("mov.u32 %0, %%warpid;" : "=r"(warp_id));
+    //if (addr == 0)
+//	record->desc = 0;
+    //  else
     record->desc = desc;
-    record->addr = addr;
+    if (addr == 0)
+	record->addr = (((uint64_t)timer) << 32) + clock;
+    else
+	record->addr = addr;
     record->cta  = cta;
+    record->meta = warp_id;
     __threadfence_system(); 
 
     if (lane_id == lowest ) atomicAdd(commit, n_active);

@@ -14,6 +14,7 @@ typedef struct record_t {
   uint64_t desc;
   uint64_t addr;
   uint64_t cta;
+  uint64_t meta;
 } record_t;
 
 #define ACCESS_TYPE_SHIFT (28)
@@ -21,12 +22,15 @@ enum ACCESS_TYPE {
   ACCESS_LOAD = 0,
   ACCESS_STORE = 1,
   ACCESS_ATOMIC = 2,
-  ACCESS_UNKNOWN = 3,
+  ACCESS_TEXECUTE = 3,
+  ACCESS_TRETURN = 4,
+  ACCESS_UNKNOWN = 5,
 };
 
 // Size of a record in bytes, contents of a record:
 // 32 bit meta info, 32bit size, 64 bit address, 64 bit cta id
-#define RECORD_SIZE (24)
+//#define RECORD_SIZE (24)
+#define RECORD_SIZE (32)
 // 6M buffer, devided into 4 parallel slots.
 // Buffers: SLOTS_NUM * SLOTS_SIZE * RECORD_SIZE
 // Absolute minimum is the warp size, all threads in a warp must collectively

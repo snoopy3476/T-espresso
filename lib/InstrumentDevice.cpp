@@ -169,6 +169,7 @@ struct InstrumentDevicePass : public ModulePass {
       for (auto &BB : *kernel) {
         for (auto &inst : BB) {
           PointerKind kind = PK_OTHER;
+	  
           if (auto *load = dyn_cast<LoadInst>(&inst)) {
             kind = getPointerKind(load->getPointerOperand(), true);
           } else if (auto *store = dyn_cast<StoreInst>(&inst)) {
@@ -179,7 +180,10 @@ struct InstrumentDevicePass : public ModulePass {
 	  } else if (auto *atomic = dyn_cast<AtomicCmpXchgInst>(&inst)) {
             // ATOMIC CAS //
             kind = getPointerKind(atomic->getPointerOperand(), true);
-	  } else if (auto *call = dyn_cast<CallInst>(&inst)) {
+	  
+	    } else if (auto *ret = dyn_cast<ReturnInst>(&inst)) {
+	      kind = PK_GLOBAL; ///////////////////////////////////////
+	    } else if (auto *call = dyn_cast<CallInst>(&inst)) {
             Function* callee = call->getCalledFunction();
             if (callee == nullptr) continue;
             StringRef calleeName = callee->getName();
@@ -192,10 +196,10 @@ struct InstrumentDevicePass : public ModulePass {
               std::string error = "call to non-intrinsic: ";
               error.append(calleeName);
               report_fatal_error(error.c_str());
-            }
-          } else {
+	    }
+	} else {
             continue;
-          }
+	}
 
           if (kind != PK_GLOBAL)
             continue;
@@ -256,6 +260,7 @@ struct InstrumentDevicePass : public ModulePass {
         report_fatal_error("No __mem_trace declaration found");
       }
 
+
       const DataLayout &DL = F->getParent()->getDataLayout();
 
       int LoadCounter = 0;
@@ -271,10 +276,18 @@ struct InstrumentDevicePass : public ModulePass {
       IRBuilder<> IRB(F->front().getFirstNonPHI());
       // Get Buffer Segment based on SMID and Load the Pointer
 
+      
+      Constant* texec_const = ConstantInt::get(IRB.getInt64Ty(), (uint64_t)0);
+      Value *PtrOperandExeRet = ConstantExpr::getIntToPtr(
+		texec_const , PointerType::getUnqual(IRB.getInt64Ty()));
+
+      
+
       for (auto *inst : MemAccesses) {
         Value *PtrOperand = nullptr;
         Value *LDesc = nullptr;
         IRB.SetInsertPoint(inst);
+	//IRB.SetInsertPoint(M->front());
 
         if (auto li = dyn_cast<LoadInst>(inst)) {
           PtrOperand = li->getPointerOperand();
@@ -294,7 +307,11 @@ struct InstrumentDevicePass : public ModulePass {
           PtrOperand = ai->getPointerOperand();
           LDesc = IRB.CreateOr(Desc, ((uint64_t)ACCESS_ATOMIC << ACCESS_TYPE_SHIFT));
           AtomicCounter++;
-        } else if (auto *FuncCall = dyn_cast<CallInst>(inst)) {
+        } else if (auto ret = dyn_cast<ReturnInst>(inst)) {
+	    //PtrOperand = null;
+	    PtrOperand = PtrOperandExeRet;
+	    LDesc = IRB.CreateOr(Desc, ((uint64_t)ACCESS_TRETURN << ACCESS_TYPE_SHIFT));
+	} else if (auto *FuncCall = dyn_cast<CallInst>(inst)) {
           // ATOMIC Inc/Dec //
           assert(FuncCall->getCalledFunction()->getName()
               .startswith("llvm.nvvm.atomic"));
@@ -305,16 +322,44 @@ struct InstrumentDevicePass : public ModulePass {
           report_fatal_error("invalid access type encountered, this should not have happened");
         }
 
-        PointerType *PtrTy = dyn_cast<PointerType>(PtrOperand->getType());
-        Type *ElemTy = PtrTy->getElementType();
-        uint64_t ValueSize = DL.getTypeStoreSize(ElemTy);
+	PointerType *PtrTy = dyn_cast<PointerType>(PtrOperand->getType());
+	Type *ElemTy = PtrTy->getElementType();
+	uint64_t ValueSize = DL.getTypeStoreSize(ElemTy);
 
         // Add tracing
         LDesc = IRB.CreateOr(LDesc, (uint64_t) ValueSize);
-        auto PtrToStore = IRB.CreatePtrToInt(PtrOperand,  IRB.getInt64Ty());
-        IRB.CreateCall(TraceCall,  {Records, Allocs, Commits, LDesc, PtrToStore, Slot});
+	auto PtrToStore = IRB.CreatePtrToInt(PtrOperand,  IRB.getInt64Ty());
+	IRB.CreateCall(TraceCall,  {Records, Allocs, Commits, LDesc, PtrToStore, Slot});
+
+	//IRBuilder<> IRB2(M->front());
       }
+
+
+      
+      IRB.SetInsertPoint(&F->front().back());
+      Value *LDesc = IRB.CreateOr(Desc, ((uint64_t)ACCESS_TEXECUTE << ACCESS_TYPE_SHIFT));
+      auto PtrToStore = IRB.CreatePtrToInt(PtrOperandExeRet,  IRB.getInt64Ty());
+      IRB.CreateCall(TraceCall,  {Records, Allocs, Commits, LDesc, PtrToStore, Slot});
+/*
+      IRBuilder<> IRB2(F->front().getFirstNonPHI());
+      //IRB.SetInsertPoint(&F->front());
+      //IRB.SetInsertPoint(F->front());
+      Value *LDesc = IRB.CreateOr(Desc, ((uint64_t)ACCESS_UNKNOWN << ACCESS_TYPE_SHIFT));
+      IRB.CreateCall(TraceCall,  {Records, Allocs, Commits, LDesc, ConstantExpr::getIntToPtr(beginConstAddress2 , PointerType::getUnqual(IRB.getInt64Ty())), Slot});*/
     }
+
+    void instrumentThreadLifetime(Function *F, ArrayRef<Instruction*> MemAccesses,
+				  TraceInfoValues *info) {
+	
+    }
+/*
+    bool NoopInserter::runOnMachineFunction(llvm::MachineFunction &fn) {
+	const llvm::TargetInstrInfo &TII = *fn.getSubtarget().getInstrInfo();
+	MachineBasicBlock& bb = *fn.begin();
+	llvm::BuildMI(bb, bb.begin(), llvm::DebugLoc(), TII.get(llvm::X86::NOOP));
+	return true;
+    }
+*/
 
     bool runOnModule(Module &M) override {
       bool isCUDA = M.getTargetTriple().find("nvptx") != std::string::npos;

@@ -49,6 +49,7 @@ typedef struct trace_record_t {
   uint8_t type;
   uint64_t addr;
   uint32_t size;
+  uint64_t meta; //
   struct {
     uint32_t x;
     uint16_t y;
@@ -98,7 +99,7 @@ trace_t *trace_open(FILE *f) {
   return res;
 }
 
-void __trace_unpack(const uint64_t buf[3], trace_record_t *record) {
+void __trace_unpack(const uint64_t buf[4], trace_record_t *record) {
   record->smid = (buf[0] >> 32);
   record->type = (buf[0] >> 28) & 0xf;
   record->size = buf[0] & 0x0fffffff;
@@ -106,9 +107,10 @@ void __trace_unpack(const uint64_t buf[3], trace_record_t *record) {
   record->ctaid.x = (buf[2] >> 32) & 0xffffffff;
   record->ctaid.y = (buf[2] >> 16) & 0x0000ffff;
   record->ctaid.z = (buf[2] >>  0) & 0x0000ffff;
+  record->meta = buf[3];
 }
 
-void __trace_pack(const trace_record_t *record, uint64_t buf[3]) {
+void __trace_pack(const trace_record_t *record, uint64_t buf[4]) {
   buf[0] = 0;
   buf[0] |= (uint64_t)record->smid << 32;
   buf[0] |= (uint64_t)(record->type & 0xf) << 28;
@@ -118,6 +120,7 @@ void __trace_pack(const trace_record_t *record, uint64_t buf[3]) {
   buf[2] |= (uint64_t)record->ctaid.x << 32;
   buf[2] |= (uint64_t)(record->ctaid.y & 0x0000ffff) << 16;
   buf[2] |= (uint64_t)record->ctaid.z & 0x0000ffff;
+  buf[3] = record->meta;
 }
 
 // returns 0 on success
@@ -153,8 +156,8 @@ int trace_next(trace_t *t) {
   // Entry is an uncompressed record
   if (ch == 0xFF) {
     t->new_kernel = 0;
-    uint64_t buf[3];
-    if (fread(buf, 24, 1, t->file) != 1) {
+    uint64_t buf[4];
+    if (fread(buf, 32, 1, t->file) != 1) {
       trace_last_error = "unable to read uncompressed record";
       return 1;
     }
@@ -167,8 +170,8 @@ int trace_next(trace_t *t) {
   // Entry is a compressed record
   if (ch == 0xFE) {
     t->new_kernel = 0;
-    uint64_t buf[3];
-    if (fread(buf, 24, 1, t->file) != 1) {
+    uint64_t buf[4];
+    if (fread(buf, 32, 1, t->file) != 1) {
       trace_last_error = "unable to read compressed record";
       return 1;
     }
@@ -246,14 +249,15 @@ int trace_write_kernel(FILE *f, const char* name) {
 
 int trace_write_record(FILE *f, const trace_record_t *record) {
   uint8_t marker = record->count == 1 ? 0xFF : 0xFE;
+  //uint8_t marker = 0xFF;
   if (fwrite(&marker, 1, 1, f) < 1) {
     trace_last_error = "write error";
     return 1;
   }
 
-  uint64_t buf[3];
+  uint64_t buf[4];
   __trace_pack(record, buf);
-  if (fwrite(buf, 24, 1, f) < 1) {
+  if (fwrite(buf, 32, 1, f) < 1) {
     trace_last_error = "write error";
     return 1;
   }

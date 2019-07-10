@@ -1,4 +1,4 @@
-CUDAFLAGS := --cuda-path=/opt/cuda-8.0 --cuda-gpu-arch=sm_30
+CUDAFLAGS := --cuda-path=/opt/cuda-9.2 --cuda-gpu-arch=sm_30
 OPTFLAGS += -load /local/amatz/memtrace/build/lib/LLVMMemtrace.so
 
 all: launches.O0.ll launches.O3.ll \

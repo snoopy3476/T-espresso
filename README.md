@@ -102,7 +102,7 @@ The configuration requires the following flags:
   default).
 - `-DMEMTRACE_CUDA_FLAGS=${PATH TO YOUR CUDA INSTALLATION}` - required if your
   CUDA 8.0 installation is located somewhere other than `/usr/local/cuda` (e.g.
-  `/opt/cuda-8.0`).
+  `/opt/cuda-9.2`).
 
 The resulting LLVM build includes the memtracer and can be used as described
 above.
