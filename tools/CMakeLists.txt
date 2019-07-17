@@ -1,12 +1,6 @@
 add_executable(cutracedump cutracedump.c)
-add_executable(cutracecompress cutracecompress.c)
 
 install(FILES ${LLVM_BINARY_DIR}/bin/cutracedump
-  DESTINATION bin
-  PERMISSIONS OWNER_EXECUTE OWNER_WRITE OWNER_READ
-  GROUP_EXECUTE GROUP_READ WORLD_EXECUTE WORLD_READ)
-
-install(FILES ${LLVM_BINARY_DIR}/bin/cutracecompress
   DESTINATION bin
   PERMISSIONS OWNER_EXECUTE OWNER_WRITE OWNER_READ
   GROUP_EXECUTE GROUP_READ WORLD_EXECUTE WORLD_READ)

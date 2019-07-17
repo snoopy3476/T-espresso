@@ -173,6 +173,7 @@ struct InstrumentHost : public ModulePass {
       Type* cuStreamPtrTy = Type::getInt8PtrTy(ctx);
       Type* voidPtrTy = Type::getInt8PtrTy(ctx);
       Type* stringTy = Type::getInt8PtrTy(ctx);
+      Type* i16Ty = Type::getInt16Ty(ctx);
       Type* voidTy = Type::getVoidTy(ctx);
 
       TraceFillInfo = M.getOrInsertFunction("__trace_fill_info",
@@ -182,7 +183,7 @@ struct InstrumentHost : public ModulePass {
       TraceTouch = M.getOrInsertFunction("__trace_touch",
           voidTy, cuStreamPtrTy);
       TraceStart = M.getOrInsertFunction("__trace_start",
-          voidTy, cuStreamPtrTy, stringTy);
+                                         voidTy, cuStreamPtrTy, stringTy, i16Ty);
       TraceStop = M.getOrInsertFunction("__trace_stop",
           voidTy, cuStreamPtrTy);
     }
@@ -201,9 +202,14 @@ struct InstrumentHost : public ModulePass {
       // 2. get trace consumer info
       // 3. copy trace consumer info to device
 
+      
+
       IRBuilder<> IRB(configureCall->getNextNode());
 
       Type* i8Ty = IRB.getInt8Ty();
+      Type* i16Ty = IRB.getInt16Ty();
+      Type* i32Ty = IRB.getInt32Ty();
+      Type* i64Ty = IRB.getInt64Ty();
 
       Value* kernelNameVal = IRB.CreateGlobalStringPtr(kernelName);
 
@@ -218,8 +224,40 @@ struct InstrumentHost : public ModulePass {
       auto *globalVarPtr = IRB.CreateBitCast(globalVar, IRB.getInt8PtrTy());
       auto* streamPtr = IRB.CreateBitCast(stream, IRB.getInt8PtrTy());
 
+
+
+      
+      /*
+      // dump all args of cudaConfigurecall
+      for (User::op_iterator arg = configureCall->arg_begin(), arg_end = configureCall->arg_end();
+           arg != arg_end; arg++) {
+        Value *cur = arg->get();
+        cur->dump();
+      }
+      */
+      
+      // Thread block size of the current kernel call
+      
+      Instruction::CastOps castOp_i64_i16 = CastInst::getCastOpcode(
+        Constant::getNullValue(i64Ty), false, i16Ty, false);
+      Instruction::CastOps castOp_i32_i16 = CastInst::getCastOpcode(
+        Constant::getNullValue(i32Ty), false, i16Ty, false);
+      
+      Value *blockSize = configureCall->getArgOperand(2);   // <32 bit: y> <32 bit: x>
+      Value *blockSize_z = configureCall->getArgOperand(3); // <32 bit: z>
+      blockSize = IRB.CreateMul(
+        IRB.CreateAnd(blockSize, 0xFFFFFFFF),
+        IRB.CreateLShr(blockSize, 32)
+        ); // x * y
+      blockSize = IRB.CreateMul(
+        IRB.CreateCast(castOp_i64_i16, blockSize, i16Ty),
+        IRB.CreateCast(castOp_i32_i16, blockSize_z, i16Ty)
+        ); // <uint16_t>(x*y) * <uint16_t>z
+      
+
+      
       IRB.CreateCall(TraceTouch, {streamPtr});
-      IRB.CreateCall(TraceStart, {streamPtr, kernelNameVal});
+      IRB.CreateCall(TraceStart, {streamPtr, kernelNameVal, blockSize});
 
       const DataLayout &DL = configureCall->getParent()->getParent()->getParent()->getDataLayout();
 

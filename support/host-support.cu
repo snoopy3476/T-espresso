@@ -11,21 +11,21 @@
 #include <stdio.h>
 #include <libgen.h>
 
-#define always_assert(cond) do {\
-  if (!(cond)) {\
-    printf("assertion failed at %s:%d: %s\n", __FILE__, __LINE__, #cond);\
-    abort();\
-  }\
-} while(0)
+#define always_assert(cond) do {                                        \
+    if (!(cond)) {                                                      \
+      printf("assertion failed at %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+      abort();                                                          \
+    }                                                                   \
+  } while(0)
 
-#define cudaChecked(code) do {\
-  cudaError_t err = code;\
-  if (err != cudaSuccess) {\
-    printf("CUDA error at %s:%d: %s\n", __FILE__, __LINE__,\
-        cudaGetErrorString(err));\
-    abort();\
-  }\
-} while(0)
+#define cudaChecked(code) do {                                  \
+    cudaError_t err = code;                                     \
+    if (err != cudaSuccess) {                                   \
+      printf("CUDA error at %s:%d: %s\n", __FILE__, __LINE__,   \
+             cudaGetErrorString(err));                          \
+      abort();                                                  \
+    }                                                           \
+  } while(0)
 
 
 static const char* getexename() {
@@ -103,6 +103,14 @@ static std::string traceName(std::string id) {
  *
  * Allocation and commit pointers are uint32_t with 64 Byte padding to avoid cache thrashing.
  */
+
+
+typedef struct kernel_trace_arg_t {
+  const char * kernel_name;
+  uint16_t kernel_block_size;
+} kernel_trace_arg_t;
+
+
 class TraceConsumer {
 public:
   TraceConsumer(std::string suffix) {
@@ -142,7 +150,7 @@ public:
     cudaFreeHost(CommitsHost);
   }
 
-  void start(std::string name) {
+  void start(const char *name, uint16_t block_size) {
     always_assert(!shouldRun);
     shouldRun = true;
 
@@ -152,7 +160,7 @@ public:
     // just for testing purposes
     memset(RecordsHost, 0, SLOTS_NUM * SLOTS_SIZE * RECORD_SIZE);
 
-    trace_write_kernel(output, name.c_str());
+    trace_write_kernel(output, name, block_size);
 
     workerThread = std::thread(consume, this);
 
@@ -182,8 +190,8 @@ protected:
   }
 
   // clear up a slot if it is full
-  static void consumeSlot(uint8_t *allocPtr, uint8_t *commitPtr, uint8_t *recordsPtr,
-      FILE* out, bool kernelActive, trace_record_t *acc) {
+  static int consumeSlot(uint8_t *allocPtr, uint8_t *commitPtr, uint8_t *recordsPtr,
+                         FILE* out, bool kernelActive, trace_record_t *acc) {
     // allocs/commits is written by threads on the GPU, so we need it volatile
     volatile uint32_t *vcommit = (uint32_t*)commitPtr;
     volatile uint32_t *valloc = (uint32_t*)allocPtr;
@@ -192,32 +200,181 @@ protected:
     // if kernel is still active we only want to read full slots
     uint32_t numRecords = *vcommit;
     if (kernelActive && !(numRecords > SLOTS_SIZE - 32)) {
-      return;
+      return 1;
     }
 
-    trace_record_t newrec;
+
+    // compression mode
+    // mode = 1 : same addresses
+    // mode = 2 : increment addresses
+    //            (before_addr + before_size * before_count = cur_addr)
+    int compression_mode;
+    char newrecOrig[TRACE_RECORD_SIZE(32)] = {0};
+    trace_record_t *const newrec = (trace_record_t *const) newrecOrig;
+
+    //static int limit_count = 0;
+    
+    trace_record_addr_t *acc_addr;
     // we know writing from the gpu stopped, so we avoid using the volatile
     // reference in the end condition
     for (int32_t i = 0; i < numRecords; ++i) {
 
-      __trace_unpack((uint64_t*)&recordsPtr[i * RECORD_SIZE], &newrec);
-
+      //printf("DEBUG-%d (%d/%d)\n", 0, i, numRecords); ///////////////////////////////
+      //char buf[TRACE_RECORD_SIZE(32)];
+      __trace_unpack((record_t *)&recordsPtr[i * RECORD_SIZE], newrec);
+/*
+      if (limit_count < 10) printf(
+        "\tNEWREC type: %u, size: %u, smid: %u, "
+        "ctaid: (%u, %u, %u), warp: %u, clock: %u, addr: %lx, alen: %u\n",
+        newrec->type, newrec->size,
+        newrec->smid, newrec->ctaid.x, newrec->ctaid.y, newrec->ctaid.z,
+        newrec->warp, newrec->clock, newrec->addr_unit->addr, newrec->addr_len);
+      
+      __trace_pack(newrec, (record_t *)buf);
+      __trace_unpack((record_t *)buf, newrec);
+      
+      if (limit_count++ < 10) printf(
+        "\tNEWREC type: %u, size: %u, smid: %u, "
+        "ctaid: (%u, %u, %u), warp: %u, clock: %u, addr: %lx, alen: %u\n",
+        newrec->type, newrec->size,
+        newrec->smid, newrec->ctaid.x, newrec->ctaid.y, newrec->ctaid.z,
+        newrec->warp, newrec->clock, newrec->addr_unit->addr, newrec->addr_len);
+*/
+      /*
+      if (limit_count++ < 300) printf(
+        "\tNEWREC type: %u, size: %u, smid: %u, "
+        "ctaid: (%u, %u, %u), warp: %u, clock: %u, addr: %lx\n"
+        "\tACC    type: %u, size: %u, smid: %u, "
+        "ctaid: (%u, %u, %u), warp: %u, clock: %u, addr_len: %u, addr: %lx, ad_count: %u\n",
+        newrec->type, newrec->size,
+        newrec->smid, newrec->ctaid.x, newrec->ctaid.y, newrec->ctaid.z,
+        newrec->warp, newrec->clock, newrec->addr_unit->addr,
+        acc->type, acc->size),
+        acc->smid, acc->ctaid.x, acc->ctaid.y, acc->ctaid.z,
+        acc->warp, acc->clock, acc->addr_len, acc->addr_unit[acc->addr_len - 1].addr, acc->addr_unit[acc->addr_len - 1].count);
+      */
+    
+      //trace_write_record(out, newrec);
+      
+      //printf("DEBUG-%d\n", 1); ///////////////////////////////
       // if this is the first record, intialize it
-      if (acc->count == 0) {
-        *acc = newrec;
-        acc->count = 1;
+      if (acc->addr_unit->count == 0) {
+        //printf("DEBUG-%d\n", 2); ///////////////////////////////
+        //if (!kernel_name)
+          //trace_write_kernel(out, kernel_name, 1302);
+        
+	memcpy(acc, newrec, sizeof(trace_record_t));
+        //*acc = *newrec;
+	acc->addr_len = 1;
+        acc_addr = &acc->addr_unit[acc->addr_len - 1];
+	acc->addr_unit->count = 1;
+	acc->addr_unit->addr = newrec->addr_unit->addr;
+	compression_mode = 0;
+        //if (limit_count < 300) printf("Init\n");
+        /*
+        if (limit_count++ < 100) printf("Init\n"
+               "\tNEWREC type: %u, size: %u, smid: %u, "
+               "ctaid: (%u, %u, %u), warp: %u, clock: %u, addr: %lx\n"
+               "\tACC    type: %u, size: %u, smid: %u, "
+               "ctaid: (%u, %u, %u), warp: %u, clock: %u, addr_len: %u\n",
+               TRACE_GETTYPE(newrec->type_size), TRACE_GETSIZE(newrec->type_size),
+               newrec->smid, newrec->ctaid.x, newrec->ctaid.y, newrec->ctaid.z,
+               newrec->warp, newrec->clock, newrec->addr_unit->addr,
+               TRACE_GETTYPE(acc->type_size), TRACE_GETSIZE(acc->type_size),
+               acc->smid, acc->ctaid.x, acc->ctaid.y, acc->ctaid.z,
+               acc->warp, acc->clock, acc->addr_len);
+        */
+        //printf("DEBUG-%d\n", 3); ///////////////////////////////
       } else { // otherwise see if we can increment or have to flush
-        uint64_t currAddress = acc->addr + (acc->size * acc->count);
-        if (newrec.addr == currAddress && newrec.type == acc->type &&
-            newrec.size == acc->size && newrec.ctaid.x == acc->ctaid.x &&
-            newrec.ctaid.y == acc->ctaid.y && newrec.ctaid.z == acc->ctaid.z &&
-            newrec.smid == acc->smid) {
-          acc->count += 1;
-        } else {
-          trace_write_record(out, acc);
-          *acc = newrec;
-          acc->count = 1;
+        //uint64_t currAddress = acc->addr_unit + (acc->size * acc->count);
+
+        //printf("DEBUG-%d\n", 4); ///////////////////////////////
+        // if second record, set compression mode when available
+        //printf("Else - %d\n", acc->addr_len);
+        if (acc_addr->count == 1) {
+          //if (limit_count < 300) printf("First ");
+          if (newrec->addr_unit->addr == acc_addr->addr) {
+            //if (limit_count < 300) printf("(same) ");
+            compression_mode = 1;
+          } else if (newrec->addr_unit->addr == acc_addr->addr +
+                     (acc->size * acc_addr->count)) {
+            //if (limit_count < 300) printf("(increment) ");
+            compression_mode = 2;
+          }
+          //printf("DEBUG-%d\n", 5); ///////////////////////////////
+          
         }
+
+        
+        //printf("DEBUG-%d\n", 6); ///////////////////////////////
+
+        
+        if (newrec->type == acc->type && newrec->size == acc->size &&
+	    newrec->smid == acc->smid && newrec->ctaid.x == acc->ctaid.x &&
+	    newrec->ctaid.y == acc->ctaid.y && newrec->ctaid.z == acc->ctaid.z &&
+	    newrec->warp == acc->warp && newrec->clock == acc->clock) {
+	    
+          //printf("DEBUG-%d\n", 10); ///////////////////////////////
+          if ( (compression_mode == 1 && newrec->addr_unit->addr == acc_addr->addr) ||
+               (compression_mode == 2 && newrec->addr_unit->addr == acc_addr->addr +
+                (acc->size * acc_addr->count)) ) {
+            
+            acc_addr->count += 1;
+            
+            //if (limit_count < 300) printf("Increment count\n");
+            //printf("DEBUG-%d\n", 11); ///////////////////////////////
+          } else {
+            //printf("DEBUG-%d\n", 12); ///////////////////////////////
+
+            // make count negative if past compression was increment mode
+            if (compression_mode == 2)
+              acc_addr->count *= -1;
+
+            acc->addr_len += 1;
+            acc_addr = &acc->addr_unit[acc->addr_len - 1];
+            acc_addr->count = 1;
+            acc_addr->addr = newrec->addr_unit->addr;
+            compression_mode = 0;
+            
+            //if (limit_count < 300) printf("Concat\n");
+            
+            //printf("DEBUG-%d\n", 13); ///////////////////////////////
+          }
+
+
+          
+          //printf("DEBUG-%d\n", 7); ///////////////////////////////
+          
+          } else {
+        //printf("DEBUG-%d\n", 8); ///////////////////////////////
+          // make count negative if past compression was increment mode
+          if (compression_mode == 2)
+            acc_addr->count *= -1;
+          /*
+          if (limit_count++ < 100) printf("Init (RE)\n"
+               "\tNEWREC type: %u, size: %u, smid: %u, "
+               "ctaid: (%u, %u, %u), warp: %u, clock: %u, addr: %lx\n"
+               "\tACC    type: %u, size: %u, smid: %u, "
+               "ctaid: (%u, %u, %u), warp: %u, clock: %u, addr_len: %u\n",
+               TRACE_GETTYPE(newrec->type_size), TRACE_GETSIZE(newrec->type_size),
+               newrec->smid, newrec->ctaid.x, newrec->ctaid.y, newrec->ctaid.z,
+               newrec->warp, newrec->clock, newrec->addr_unit->addr,
+               TRACE_GETTYPE(acc->type_size), TRACE_GETSIZE(acc->type_size),
+               acc->smid, acc->ctaid.x, acc->ctaid.y, acc->ctaid.z,
+               acc->warp, acc->clock, acc->addr_len);
+          */
+          //if (limit_count < 300) printf("RE-Init\n");
+          trace_write_record(out, acc);
+          
+          memcpy(acc, newrec, TRACE_RECORD_SIZE(1));
+          acc->addr_len = 1;
+          acc_addr = &acc->addr_unit[acc->addr_len - 1];
+          acc->addr_unit->count = 1;
+          acc->addr_unit->addr = newrec->addr_unit->addr;
+          compression_mode = 0;
+          //printf("DEBUG-%d\n", 9); ///////////////////////////////
+        }
+          
       }
     }
 
@@ -225,12 +382,17 @@ protected:
     // ensure commits are reset first
     std::atomic_thread_fence(std::memory_order_release);
     *valloc = 0;
+
+    return 0;
   }
 
   // payload function of queue consumer
   static void consume(TraceConsumer *obj) {
     obj->doesRun = true;
-    obj->recordAcc.count = 0; // count == 0 -> uninitialized
+    
+    char recordAccOrig[TRACE_RECORD_SIZE(32)] = {0};
+    trace_record_t *const recordAcc = (trace_record_t *const) recordAccOrig;
+    // recordAcc->addr_len == 0 -> uninitialized
 
     uint8_t *allocs = obj->AllocsHost;
     uint8_t *commits = obj->CommitsHost;
@@ -238,13 +400,14 @@ protected:
 
     FILE* sink = obj->output;
 
+
     while(obj->shouldRun) {
       for(int slot = 0; slot < SLOTS_NUM; slot++) {
         uint32_t allocs_offset = slot * CACHELINE;
         uint32_t commits_offset = slot * CACHELINE;
         uint32_t records_offset = slot * SLOTS_SIZE * RECORD_SIZE;
         consumeSlot(&allocs[allocs_offset], &commits[commits_offset],
-            &records[records_offset], sink, true, &obj->recordAcc);
+                    &records[records_offset], sink, true, recordAcc);
       }
     }
 
@@ -254,14 +417,14 @@ protected:
       uint32_t allocs_offset = slot * CACHELINE;
       uint32_t commits_offset = slot * CACHELINE;
       uint32_t records_offset = slot * SLOTS_SIZE * RECORD_SIZE;
-        consumeSlot(&allocs[allocs_offset], &commits[commits_offset],
-            &records[records_offset], sink, false, &obj->recordAcc);
+      consumeSlot(&allocs[allocs_offset], &commits[commits_offset],
+                  &records[records_offset], sink, false, recordAcc);
     }
 
     // flush accumulator and reset to uninitialized (if at all initialized)
-    if (obj->recordAcc.count > 0) {
-      trace_write_record(sink, &obj->recordAcc);
-      obj->recordAcc.count = 0;
+    if (recordAcc->addr_len > 0) {
+      trace_write_record(sink, recordAcc);
+      recordAcc->addr_len = 0;
     }
 
     obj->doesRun = false;
@@ -272,7 +435,7 @@ protected:
 
   std::atomic<bool> shouldRun;
   std::atomic<bool> doesRun;
-  trace_record_t recordAcc; // recordAccumulator for compression
+  //trace_record_t recordAcc; // recordAccumulator for compression
 
   FILE *output;
   std::thread       workerThread;
@@ -310,7 +473,7 @@ public:
   }
 
   /** Return *already initialized* TraceConsumer for a stream. Aborts application
-    * if stream is not initialized.
+   * if stream is not initialized.
    */
   TraceConsumer *getConsumer(cudaStream_t stream) {
     for (auto &consumerPair : consumers) {
@@ -338,46 +501,55 @@ TraceManager __trace_manager;
  */
 
 extern "C" {
+  
+  void __trace_fill_info(const void *info, cudaStream_t stream) {
+    auto *consumer = __trace_manager.getConsumer(stream);
+    consumer->fillTraceinfo((traceinfo_t*) info);
+  }
 
-void __trace_fill_info(const void *info, cudaStream_t stream) {
-  auto *consumer = __trace_manager.getConsumer(stream);
-  consumer->fillTraceinfo((traceinfo_t*) info);
-}
+  void __trace_copy_to_symbol(cudaStream_t stream, const void* symbol, const void *info) {
+    //printf("cudaMemcpyToSymbol(%p, %p, %zu, 0, cudaMemcpyHostToDevice)\n", symbol, info, sizeof(traceinfo_t));
+    cudaChecked(cudaMemcpyToSymbolAsync(symbol, info, sizeof(traceinfo_t), 0, cudaMemcpyHostToDevice, stream));
+  }
 
-void __trace_copy_to_symbol(cudaStream_t stream, const void* symbol, const void *info) {
-  //printf("cudaMemcpyToSymbol(%p, %p, %zu, 0, cudaMemcpyHostToDevice)\n", symbol, info, sizeof(traceinfo_t));
-  cudaChecked(cudaMemcpyToSymbolAsync(symbol, info, sizeof(traceinfo_t), 0, cudaMemcpyHostToDevice, stream));
-}
+  static void __trace_start_callback(cudaStream_t stream, cudaError_t status, void *vargs);
+  static void __trace_stop_callback(cudaStream_t stream, cudaError_t status, void *vargs);
 
-static void __trace_start_callback(cudaStream_t stream, cudaError_t status, void *vargs);
-static void __trace_stop_callback(cudaStream_t stream, cudaError_t status, void *vargs);
+  void __trace_touch(cudaStream_t stream) {
+    __trace_manager.touchConsumer(stream);
+  }
 
-void __trace_touch(cudaStream_t stream) {
-  __trace_manager.touchConsumer(stream);
-}
+  void __trace_start(cudaStream_t stream, const char *kernel_name, uint16_t block_size) {
+    kernel_trace_arg_t *arg = (kernel_trace_arg_t *) malloc(sizeof(kernel_trace_arg_t));
+    if (arg == nullptr) {
+      printf("unable to allocate memory\n");
+      abort();
+    }
+    *arg = (kernel_trace_arg_t){kernel_name, block_size};
+    
+    cudaChecked(cudaStreamAddCallback(stream,
+                                      __trace_start_callback, (void*)arg, 0));
+  }
 
-void __trace_start(cudaStream_t stream, const char *kernel_name) {
-  cudaChecked(cudaStreamAddCallback(stream,
-        __trace_start_callback, (void*)kernel_name, 0));
-}
-
-void __trace_stop(cudaStream_t stream) {
-  cudaChecked(cudaStreamAddCallback(stream,
-        __trace_stop_callback, (void*)nullptr, 0));
-}
+  void __trace_stop(cudaStream_t stream) {
+    cudaChecked(cudaStreamAddCallback(stream,
+                                      __trace_stop_callback, (void*)nullptr, 0));
+  }
 
 /***********************************************************
  * private parts of implementation
  */
 
-static void __trace_start_callback(cudaStream_t stream, cudaError_t status, void *vargs) {
-  auto *consumer = __trace_manager.getConsumer(stream);
-  consumer->start((const char*)vargs);
-}
+  static void __trace_start_callback(cudaStream_t stream, cudaError_t status, void *vargs) {
+    auto *consumer = __trace_manager.getConsumer(stream);
+    kernel_trace_arg_t *vargs_cast = (kernel_trace_arg_t *)vargs;
+    consumer->start(vargs_cast->kernel_name, vargs_cast->kernel_block_size);
+    free(vargs_cast);
+  }
 
-static void __trace_stop_callback(cudaStream_t stream, cudaError_t status, void *vargs) {
-  auto *consumer = __trace_manager.getConsumer(stream);
-  consumer->stop();
-}
+  static void __trace_stop_callback(cudaStream_t stream, cudaError_t status, void *vargs) {
+    auto *consumer = __trace_manager.getConsumer(stream);
+    consumer->stop();
+  }
 
 }

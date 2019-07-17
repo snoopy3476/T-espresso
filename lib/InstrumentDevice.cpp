@@ -4,6 +4,8 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InlineAsm.h"
+#include "llvm/IR/DebugLoc.h"
+#include "llvm/IR/DebugInfoMetadata.h"
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -47,7 +49,7 @@ Constant *getOrInsertTraceDecl(Module &M) {
   Type *i32Ty = Type::getInt32Ty(ctx);
 
   return M.getOrInsertFunction("__mem_trace", voidTy,
-      i8PtrTy, i8PtrTy, i8PtrTy, i64Ty, i64Ty, i32Ty);
+			       i8PtrTy, i8PtrTy, i8PtrTy, i64Ty, i64Ty, i64Ty, i32Ty);
 }
 
 std::vector<Function*> getKernelFunctions(Module &M) {
@@ -180,9 +182,12 @@ struct InstrumentDevicePass : public ModulePass {
 	  } else if (auto *atomic = dyn_cast<AtomicCmpXchgInst>(&inst)) {
             // ATOMIC CAS //
             kind = getPointerKind(atomic->getPointerOperand(), true);
-	  
+	    
+	    /*
 	    } else if (auto *ret = dyn_cast<ReturnInst>(&inst)) {
 	      kind = PK_GLOBAL; ///////////////////////////////////////
+	    */
+	    
 	    } else if (auto *call = dyn_cast<CallInst>(&inst)) {
             Function* callee = call->getCalledFunction();
             if (callee == nullptr) continue;
@@ -282,6 +287,13 @@ struct InstrumentDevicePass : public ModulePass {
 		texec_const , PointerType::getUnqual(IRB.getInt64Ty()));
 
       
+      IntegerType* I64Type = IntegerType::get(M.getContext(), 64);
+      FunctionType *ASMFTy = FunctionType::get(I64Type, false);
+      InlineAsm *ClockASM = InlineAsm::get(ASMFTy,
+					   "mov.u64 $0, %clock64;", "=l", true,
+					   InlineAsm::AsmDialect::AD_ATT );
+
+      
 
       for (auto *inst : MemAccesses) {
         Value *PtrOperand = nullptr;
@@ -327,39 +339,33 @@ struct InstrumentDevicePass : public ModulePass {
 	uint64_t ValueSize = DL.getTypeStoreSize(ElemTy);
 
         // Add tracing
+	//IRB.CreateAlloca(IRB.getInt32Ty());
+
+	//FunctionType *ASMFTy = FunctionType::get(I32Type, false);
+	//InlineAsm::get(FunctionType *Ty, StringRef AsmString, StringRef Constraints, bool hasSideEffects)
+	
+	//Instruction *instruction = dyn_cast<Instruction>(inst);
+	//const llvm::DebugLoc &debugInfo = instruction->getDebugLoc();
+	
+	Value *Clock = IRB.CreateCall(ClockASM);
+	
         LDesc = IRB.CreateOr(LDesc, (uint64_t) ValueSize);
 	auto PtrToStore = IRB.CreatePtrToInt(PtrOperand,  IRB.getInt64Ty());
-	IRB.CreateCall(TraceCall,  {Records, Allocs, Commits, LDesc, PtrToStore, Slot});
-
-	//IRBuilder<> IRB2(M->front());
+	IRB.CreateCall(TraceCall,  {Records, Allocs, Commits, LDesc, PtrToStore, Clock, Slot});
       }
 
-
-      
+      /*
       IRB.SetInsertPoint(&F->front().back());
       Value *LDesc = IRB.CreateOr(Desc, ((uint64_t)ACCESS_TEXECUTE << ACCESS_TYPE_SHIFT));
       auto PtrToStore = IRB.CreatePtrToInt(PtrOperandExeRet,  IRB.getInt64Ty());
       IRB.CreateCall(TraceCall,  {Records, Allocs, Commits, LDesc, PtrToStore, Slot});
-/*
-      IRBuilder<> IRB2(F->front().getFirstNonPHI());
-      //IRB.SetInsertPoint(&F->front());
-      //IRB.SetInsertPoint(F->front());
-      Value *LDesc = IRB.CreateOr(Desc, ((uint64_t)ACCESS_UNKNOWN << ACCESS_TYPE_SHIFT));
-      IRB.CreateCall(TraceCall,  {Records, Allocs, Commits, LDesc, ConstantExpr::getIntToPtr(beginConstAddress2 , PointerType::getUnqual(IRB.getInt64Ty())), Slot});*/
+      */
     }
 
     void instrumentThreadLifetime(Function *F, ArrayRef<Instruction*> MemAccesses,
 				  TraceInfoValues *info) {
 	
     }
-/*
-    bool NoopInserter::runOnMachineFunction(llvm::MachineFunction &fn) {
-	const llvm::TargetInstrInfo &TII = *fn.getSubtarget().getInstrInfo();
-	MachineBasicBlock& bb = *fn.begin();
-	llvm::BuildMI(bb, bb.begin(), llvm::DebugLoc(), TII.get(llvm::X86::NOOP));
-	return true;
-    }
-*/
 
     bool runOnModule(Module &M) override {
       bool isCUDA = M.getTargetTriple().find("nvptx") != std::string::npos;
@@ -373,8 +379,6 @@ struct InstrumentDevicePass : public ModulePass {
 
         instrumentKernel(kernel, accesses, &info);
       }
-
-      //M.dump();
 
       return true;
     }

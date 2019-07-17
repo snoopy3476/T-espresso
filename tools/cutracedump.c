@@ -7,13 +7,13 @@
 
 #include <stdio.h>
 
-#define die(...) do {\
-  printf(__VA_ARGS__);\
-  exit(1);\
-} while(0)
+#define die(...) do {                           \
+    printf(__VA_ARGS__);                        \
+    exit(1);                                    \
+  } while(0)
 
 const char* ACC_TYPE_NAMES[] = {
-    "LD", "ST", "AT", "EXE", "RET"
+  "LD", "ST", "AT", "EXE", "RET"
 };
 
 void usage(const char* program_name) {
@@ -45,48 +45,66 @@ int main(int argc, char** argv) {
     die("%s", trace_last_error);
   }
 
-  int64_t accesses = -1;
+  //int64_t accesses = -1;
+  uint16_t block_size = 0;
+  
   while (trace_next(trace) == 0) {
+    
     if (trace->new_kernel) {
-      if (accesses > -1) {
-        printf("  Total number of accesses: %" PRId64 "\n", accesses);
-      }
-      printf("Kernel name: %s\n", trace->kernel_name);
-      accesses = 0;
+      //if (accesses > -1) {
+        //printf("  Total number of accesses: %" PRId64 "\n", accesses);
+      //}
+      printf("\n\nkernel %s\n\n", trace->kernel_name);
+      block_size = trace->block_size;
+      //accesses = 0;
     } else {
       trace_record_t *r = &trace->record;
-      accesses += r->count;
+      //accesses += r->count;
       if (quiet) {
         continue;
       }
-      if (r->count == 1) {
-        if (r->type != 3 && r->type != 4) ///////////////////////////
-	  printf("  type: %s, addr: 0x%" PRIx64 ", sm: %d, cta: (%2d,%2d,%2d), warp: %ld, size: %" PRIu32 "\n",
-		 ACC_TYPE_NAMES[r->type], r->addr, r->smid,
-	    r->ctaid.x, r->ctaid.y, r->ctaid.z, r->meta, r->size);
-	else
-	  printf("  type: %s, timer: %10" PRIu32 ", clock: %10" PRIu32 ", sm: %d, cta: (%2d,%2d,%2d), warp: %ld, size: %" PRIu32 "\n",
-		 ACC_TYPE_NAMES[r->type], (uint32_t)(r->addr >> 32), (uint32_t)(r->addr & 2147483647), r->smid,
-	    r->ctaid.x, r->ctaid.y, r->ctaid.z, r->meta, r->size);
-      } else {
-	  if (r->type != 3 && r->type != 4) /////////////////////////
-	  printf("  type: %s, addr: 0x%" PRIx64 ", sm: %d, cta: (%2d,%2d,%2d), warp: %ld, size: %" PRIu32 ", count: %" PRIu16 "\n",
-	    ACC_TYPE_NAMES[r->type], r->addr, r->smid,
-	    r->ctaid.x, r->ctaid.y, r->ctaid.z, r->meta, r->size, r->count);
-	else
-	  printf("  type: %s, timer: %10" PRIu32 ", clock: %10" PRIu32 ", sm: %d, cta: (%2d,%2d,%2d), warp: %ld, size: %" PRIu32 ", count: %" PRIu16 "\n",
-		 ACC_TYPE_NAMES[r->type], (uint32_t)(r->addr >> 32), (uint32_t)(r->addr & 2147483647), r->smid,
-		 r->ctaid.x, r->ctaid.y, r->ctaid.z, r->meta, r->size, r->count);
+      
+      printf("warpid %" PRIu32 " %" PRIx32 " %" PRIu16, r->warp, 0, block_size);
+
+      for (uint8_t i = 0; i < r->addr_len; i++) {
+        int64_t increment = 0;
+        int8_t count = r->addr_unit[i].count;
+        if (count < 0) {
+          increment = r->size;
+          count *= -1;
+        }
+        
+        for (int8_t j = 0; j < count; j++) {
+          printf(" %"PRIx64, (r->addr_unit[i].addr) + increment*j);
+        }
       }
+      
+      printf(" \t|sm|%"PRIu8"|\t|cta|%"PRIu32"/%"PRIu16"/%"PRIu16
+             "|\t|type|%s|\t|clk|%020"PRIu64"|\t|size|%"PRIu32"|\n",
+             r->smid, r->ctaid.x, r->ctaid.y, r->ctaid.z,
+             ACC_TYPE_NAMES[r->type],
+             r->clock, r->size);
+
+      /*
+      if (r->count == 1) {
+        printf("  type: %s, addr: 0x%" PRIx64 ", sm: %d, cta: (%d,%d,%d), warp: %u, size: %u, clock: %u\n",
+          ACC_TYPE_NAMES[r->type], r->addr, r->smid,
+          r->ctaid.x, r->ctaid.y, r->ctaid.z, r->warp, r->size, r->clock);
+      } else {
+        printf("  type: %s, start: 0x%" PRIx64 ", sm: %d, cta: (%d,%d,%d), warp: %u, size: %u, clock: %u, count: %u\n",
+               ACC_TYPE_NAMES[r->type], r->addr, r->smid,
+               r->ctaid.x, r->ctaid.y, r->ctaid.z, r->warp, r->size, r->clock, r->count);
+      }
+    */
     }
   }
   if (trace_last_error != NULL) {
     printf("position: %zu\n", ftell(trace->file));
     die("%s\n", trace_last_error);
   }
-  if (accesses > -1) {
-    printf("  Total number of accesses: %" PRId64 "\n", accesses);
-  }
+  //if (accesses > -1) {
+  //  printf("  Total number of accesses: %" PRId64 "\n", accesses);
+  //}
 
   trace_close(trace);
 }
