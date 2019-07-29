@@ -13,7 +13,7 @@
   } while(0)
 
 const char* ACC_TYPE_NAMES[] = {
-  "LD", "ST", "AT", "EXE", "RET"
+  "LD", "ST", "AT", "CALL", "RET", "??"
 };
 
 void usage(const char* program_name) {
@@ -51,15 +51,10 @@ int main(int argc, char** argv) {
   while (trace_next(trace) == 0) {
     
     if (trace->new_kernel) {
-      //if (accesses > -1) {
-        //printf("  Total number of accesses: %" PRId64 "\n", accesses);
-      //}
       printf("\n\nkernel %s\n\n", trace->kernel_name);
       block_size = trace->block_size;
-      //accesses = 0;
     } else {
       trace_record_t *r = &trace->record;
-      //accesses += r->count;
       if (quiet) {
         continue;
       }
@@ -67,47 +62,48 @@ int main(int argc, char** argv) {
       printf("warpid %" PRIu32 " %" PRIx32 " %" PRIu16, r->warp, 0, block_size);
 
       // print mem
-      for (uint8_t i = 0; i < r->addr_len; i++) {
-        trace_record_addr_t *acc_addr = &r->addr_unit[i];
-        int64_t increment = acc_addr->offset;
-        int8_t count = acc_addr->count;
-        /*if (count < 0) {
-          increment = acc_addr->offset;
-          count *= -1;
-          }*/
-        //printf("count: %d, offset: %d, increment: %ld\n", acc_addr->count, acc_addr->offset, increment);
-        
-        for (int8_t j = 0; j < count; j++) {
-          printf(" %" PRIx64, (acc_addr->addr) + increment*j);
-        }
-      }
-      
-      printf(" \t|sm|%" PRIu8 "|\t|cta|%" PRIu32 "/%" PRIu16 "/%" PRIu16
-             "|\t|type|%s|\t|clk|%020" PRIu64 "|\t|size|%" PRIu32 "|\n",
-             r->smid, r->ctaid.x, r->ctaid.y, r->ctaid.z,
-             ACC_TYPE_NAMES[r->type],
-             r->clock, r->size);
+      if (r->type == ACCESS_CALL || r->type == ACCESS_RETURN) {
 
-      /*
-      if (r->count == 1) {
-        printf("  type: %s, addr: 0x%" PRIx64 ", sm: %d, cta: (%d,%d,%d), warp: %u, size: %u, clock: %u\n",
-          ACC_TYPE_NAMES[r->type], r->addr, r->smid,
-          r->ctaid.x, r->ctaid.y, r->ctaid.z, r->warp, r->size, r->clock);
+        for (uint8_t i = 0; i < r->addr_len; i++) {
+          trace_record_addr_t *acc_addr = &r->addr_unit[i];
+          int64_t increment = acc_addr->offset;
+          int8_t count = acc_addr->count;
+        
+          for (int8_t j = 0; j < count; j++) {
+            printf(" %" PRIu64, (acc_addr->addr) + increment*j);
+          }
+        }
+
+        printf(" \t|sm|%" PRIu8 "|\t|cta|%" PRIu32 "/%" PRIu16 "/%" PRIu16
+               "|\t|type|%s|\t|clk|%020" PRIu64 "|\n",
+               r->smid, r->ctaid.x, r->ctaid.y, r->ctaid.z,
+               ACC_TYPE_NAMES[r->type],
+               r->clock);
+        
       } else {
-        printf("  type: %s, start: 0x%" PRIx64 ", sm: %d, cta: (%d,%d,%d), warp: %u, size: %u, clock: %u, count: %u\n",
-               ACC_TYPE_NAMES[r->type], r->addr, r->smid,
-               r->ctaid.x, r->ctaid.y, r->ctaid.z, r->warp, r->size, r->clock, r->count);
+        for (uint8_t i = 0; i < r->addr_len; i++) {
+          trace_record_addr_t *acc_addr = &r->addr_unit[i];
+          int64_t increment = acc_addr->offset;
+          int8_t count = acc_addr->count;
+        
+          for (int8_t j = 0; j < count; j++) {
+            printf(" %" PRIx64, (acc_addr->addr) + increment*j);
+          }
+        }
+        
+        printf(" \t|sm|%" PRIu8 "|\t|cta|%" PRIu32 "/%" PRIu16 "/%" PRIu16
+               "|\t|type|%s|\t|clk|%020" PRIu64 "|\t|size|%" PRIu32 "|\n",
+               r->smid, r->ctaid.x, r->ctaid.y, r->ctaid.z,
+               ACC_TYPE_NAMES[r->type],
+               r->clock, r->size);
       }
-    */
+
     }
   }
   if (trace_last_error != NULL) {
     printf("position: %zu\n", ftell(trace->file));
     die("%s\n", trace_last_error);
   }
-  //if (accesses > -1) {
-  //  printf("  Total number of accesses: %" PRId64 "\n", accesses);
-  //}
 
   trace_close(trace);
 }

@@ -182,13 +182,9 @@ struct InstrumentDevicePass : public ModulePass {
 	  } else if (auto *atomic = dyn_cast<AtomicCmpXchgInst>(&inst)) {
             // ATOMIC CAS //
             kind = getPointerKind(atomic->getPointerOperand(), true);
-	    
-	    /*
-	    } else if (auto *ret = dyn_cast<ReturnInst>(&inst)) {
-	      kind = PK_GLOBAL; ///////////////////////////////////////
-	    */
-	    
-	    } else if (auto *call = dyn_cast<CallInst>(&inst)) {
+          } else if (auto *ret = dyn_cast<ReturnInst>(&inst)) {
+            kind = PK_GLOBAL;
+          } else if (auto *call = dyn_cast<CallInst>(&inst)) {
             Function* callee = call->getCalledFunction();
             if (callee == nullptr) continue;
             StringRef calleeName = callee->getName();
@@ -202,9 +198,9 @@ struct InstrumentDevicePass : public ModulePass {
               error.append(calleeName);
               report_fatal_error(error.c_str());
 	    }
-	} else {
+          } else {
             continue;
-	}
+          }
 
           if (kind != PK_GLOBAL)
             continue;
@@ -226,6 +222,14 @@ struct InstrumentDevicePass : public ModulePass {
       auto* globalVar = defineDeviceGlobal(M, traceInfoTy, symbolName);
       assert(globalVar != nullptr);
 
+      // Execution Clock
+      IntegerType* I64Type = IntegerType::get(M.getContext(), 64);
+      FunctionType *I64FnTy = FunctionType::get(I64Type, false);
+      InlineAsm *ClockASM = InlineAsm::get(I64FnTy,
+                                           "mov.u64 $0, %clock64;", "=l", true,
+                                           InlineAsm::AsmDialect::AD_ATT );
+      Value *Clock = IRB.CreateCall(ClockASM);
+
       Value *AllocsPtr = IRB.CreateStructGEP(nullptr, globalVar, 0);
       Value *Allocs = IRB.CreateLoad(AllocsPtr, "allocs");
 
@@ -237,11 +241,11 @@ struct InstrumentDevicePass : public ModulePass {
 
       IntegerType* I32Type = IntegerType::get(M.getContext(), 32);
 
-      FunctionType *ASMFTy = FunctionType::get(I32Type, false);
+      FunctionType *I32FnTy = FunctionType::get(I32Type, false);
 
-      InlineAsm *SMIdASM = InlineAsm::get(ASMFTy,
-          "mov.u32 $0, %smid;", "=r", false,
-          InlineAsm::AsmDialect::AD_ATT );
+      InlineAsm *SMIdASM = InlineAsm::get(I32FnTy,
+                                          "mov.u32 $0, %smid;", "=r", false,
+                                          InlineAsm::AsmDialect::AD_ATT );
       Value *SMId = IRB.CreateCall(SMIdASM);
 
       auto SMId64 = IRB.CreateZExtOrBitCast(SMId, IRB.getInt64Ty(), "desc");
@@ -254,137 +258,147 @@ struct InstrumentDevicePass : public ModulePass {
       info->Records = Records;
       info->Desc = Desc;
       info->Slot = Slot;
-    }
 
-    void instrumentKernel(Function *F, ArrayRef<Instruction*> MemAccesses,
-        TraceInfoValues *info) {
-      Module &M = *F->getParent();
-
+    
+      // Tracecall for Kernel Execution
+      
       Constant* TraceCall = getOrInsertTraceDecl(M);
       if (!TraceCall) {
         report_fatal_error("No __mem_trace declaration found");
       }
+      
+      Value *LDesc = IRB.CreateOr(Desc, ((uint64_t)ACCESS_CALL << ACCESS_TYPE_SHIFT));
+      InlineAsm *LaneIDASM = InlineAsm::get(I32FnTy,
+                                            "mov.u32 $0, %laneid;", "=r", false,
+                                            InlineAsm::AsmDialect::AD_ATT );
+      Value *Data = IRB.CreateCall(LaneIDASM);
+      Instruction::CastOps LaneIDCastOp = CastInst::getCastOpcode(Data, false, I64Type, false);
+      Data = IRB.CreateCast(LaneIDCastOp, Data, I64Type);
+      IRB.CreateCall(TraceCall, {Records, Allocs, Commits, LDesc, Data, Clock, Slot});
+    }
+
+  void instrumentKernel(Function *F, ArrayRef<Instruction*> MemAccesses,
+                        TraceInfoValues *info) {
+    Module &M = *F->getParent();
+
+    Constant* TraceCall = getOrInsertTraceDecl(M);
+    if (!TraceCall) {
+      report_fatal_error("No __mem_trace declaration found");
+    }
 
 
-      const DataLayout &DL = F->getParent()->getDataLayout();
+    const DataLayout &DL = F->getParent()->getDataLayout();
 
-      int LoadCounter = 0;
-      int AtomicCounter = 0;
-      int StoreCounter = 0;
+    /*
+    int LoadCounter = 0;
+    int AtomicCounter = 0;
+    int StoreCounter = 0;
+    */
+    
+    auto Allocs = info->Allocs;
+    auto Commits = info->Commits;
+    auto Records = info->Records;
+    auto Slot = info->Slot;
+    auto Desc = info->Desc;
 
-      auto Allocs = info->Allocs;
-      auto Commits = info->Commits;
-      auto Records = info->Records;
-      auto Slot = info->Slot;
-      auto Desc = info->Desc;
-
-      IRBuilder<> IRB(F->front().getFirstNonPHI());
-      // Get Buffer Segment based on SMID and Load the Pointer
+    IRBuilder<> IRB(F->front().getFirstNonPHI());
 
       
-      Constant* texec_const = ConstantInt::get(IRB.getInt64Ty(), (uint64_t)0);
-      Value *PtrOperandExeRet = ConstantExpr::getIntToPtr(
-		texec_const , PointerType::getUnqual(IRB.getInt64Ty()));
+    IntegerType* I64Type = IntegerType::get(M.getContext(), 64);
+    FunctionType *ClockASMFTy = FunctionType::get(I64Type, false);
+    InlineAsm *ClockASM = InlineAsm::get(ClockASMFTy,
+                                         "mov.u64 $0, %clock64;", "=l", true,
+                                         InlineAsm::AsmDialect::AD_ATT );
 
       
-      IntegerType* I64Type = IntegerType::get(M.getContext(), 64);
-      FunctionType *ASMFTy = FunctionType::get(I64Type, false);
-      InlineAsm *ClockASM = InlineAsm::get(ASMFTy,
-					   "mov.u64 $0, %clock64;", "=l", true,
-					   InlineAsm::AsmDialect::AD_ATT );
+    IntegerType* I32Type = IntegerType::get(M.getContext(), 32);
+    FunctionType *I32FnTy = FunctionType::get(I32Type, false);
+    InlineAsm *LaneIDASM = InlineAsm::get(I32FnTy,
+                                          "mov.u32 $0, %laneid;", "=r", false,
+                                          InlineAsm::AsmDialect::AD_ATT );
+    Value *LaneID = IRB.CreateCall(LaneIDASM); // lane id
+    Instruction::CastOps LaneIDCastOp = CastInst::getCastOpcode(LaneID, false, I64Type, false);
+    LaneID = IRB.CreateCast(LaneIDCastOp, LaneID, I64Type);
 
-      
 
-      for (auto *inst : MemAccesses) {
-        Value *PtrOperand = nullptr;
-        Value *LDesc = nullptr;
-        IRB.SetInsertPoint(inst);
-	//IRB.SetInsertPoint(M->front());
+    for (auto *inst : MemAccesses) {
+      Value *PtrOperand = nullptr;
+      Value *Data = nullptr;
+      Value *LDesc = nullptr;
+      IRB.SetInsertPoint(inst);
+      //IRB.SetInsertPoint(M->front());
 
-        if (auto li = dyn_cast<LoadInst>(inst)) {
-          PtrOperand = li->getPointerOperand();
-          LDesc = IRB.CreateOr(Desc, ((uint64_t)ACCESS_LOAD << ACCESS_TYPE_SHIFT));
-          LoadCounter++;
-        } else if (auto si = dyn_cast<StoreInst>(inst)) {
-          PtrOperand = si->getPointerOperand();
-          LDesc = IRB.CreateOr(Desc, ((uint64_t)ACCESS_STORE << ACCESS_TYPE_SHIFT));
-          StoreCounter++;
-        } else if (auto ai = dyn_cast<AtomicRMWInst>(inst)) {
-          // ATOMIC Add/Sub/Exch/Min/Max/And/Or/Xor //
-          PtrOperand = ai->getPointerOperand();
-          LDesc = IRB.CreateOr(Desc, ((uint64_t)ACCESS_ATOMIC << ACCESS_TYPE_SHIFT));
-          AtomicCounter++;
-	} else if (auto ai = dyn_cast<AtomicCmpXchgInst>(inst)) {
-          // ATOMIC CAS //
-          PtrOperand = ai->getPointerOperand();
-          LDesc = IRB.CreateOr(Desc, ((uint64_t)ACCESS_ATOMIC << ACCESS_TYPE_SHIFT));
-          AtomicCounter++;
-        } else if (auto ret = dyn_cast<ReturnInst>(inst)) {
-	    //PtrOperand = null;
-	    PtrOperand = PtrOperandExeRet;
-	    LDesc = IRB.CreateOr(Desc, ((uint64_t)ACCESS_TRETURN << ACCESS_TYPE_SHIFT));
-	} else if (auto *FuncCall = dyn_cast<CallInst>(inst)) {
-          // ATOMIC Inc/Dec //
-          assert(FuncCall->getCalledFunction()->getName()
-              .startswith("llvm.nvvm.atomic"));
-          PtrOperand = FuncCall->getArgOperand(0);
-          LDesc      = IRB.CreateOr(Desc, ((uint64_t)ACCESS_ATOMIC << ACCESS_TYPE_SHIFT));
-          AtomicCounter++;
-        } else {
-          report_fatal_error("invalid access type encountered, this should not have happened");
-        }
-
-	PointerType *PtrTy = dyn_cast<PointerType>(PtrOperand->getType());
-	Type *ElemTy = PtrTy->getElementType();
-	uint64_t ValueSize = DL.getTypeStoreSize(ElemTy);
-
-        // Add tracing
-	//IRB.CreateAlloca(IRB.getInt32Ty());
-
-	//FunctionType *ASMFTy = FunctionType::get(I32Type, false);
-	//InlineAsm::get(FunctionType *Ty, StringRef AsmString, StringRef Constraints, bool hasSideEffects)
-	
-	//Instruction *instruction = dyn_cast<Instruction>(inst);
-	//const llvm::DebugLoc &debugInfo = instruction->getDebugLoc();
-	
-	Value *Clock = IRB.CreateCall(ClockASM);
-	
-        LDesc = IRB.CreateOr(LDesc, (uint64_t) ValueSize);
-	auto PtrToStore = IRB.CreatePtrToInt(PtrOperand,  IRB.getInt64Ty());
-	IRB.CreateCall(TraceCall,  {Records, Allocs, Commits, LDesc, PtrToStore, Clock, Slot});
+      if (auto li = dyn_cast<LoadInst>(inst)) {
+        PtrOperand = li->getPointerOperand();
+        LDesc = IRB.CreateOr(Desc, ((uint64_t)ACCESS_LOAD << ACCESS_TYPE_SHIFT));
+        //LoadCounter++;
+                             
+      } else if (auto si = dyn_cast<StoreInst>(inst)) {
+        PtrOperand = si->getPointerOperand();
+        LDesc = IRB.CreateOr(Desc, ((uint64_t)ACCESS_STORE << ACCESS_TYPE_SHIFT));
+        //StoreCounter++;
+                             
+      } else if (auto ai = dyn_cast<AtomicRMWInst>(inst)) {
+        // ATOMIC Add/Sub/Exch/Min/Max/And/Or/Xor //
+        PtrOperand = ai->getPointerOperand();
+        LDesc = IRB.CreateOr(Desc, ((uint64_t)ACCESS_ATOMIC << ACCESS_TYPE_SHIFT));
+        //AtomicCounter++;
+                             
+      } else if (auto ai = dyn_cast<AtomicCmpXchgInst>(inst)) {
+        // ATOMIC CAS //
+        PtrOperand = ai->getPointerOperand();
+        LDesc = IRB.CreateOr(Desc, ((uint64_t)ACCESS_ATOMIC << ACCESS_TYPE_SHIFT));
+        //AtomicCounter++;
+                             
+      } else if (auto *FuncCall = dyn_cast<CallInst>(inst)) {
+        // ATOMIC Inc/Dec //
+        assert(FuncCall->getCalledFunction()->getName()
+               .startswith("llvm.nvvm.atomic"));
+        PtrOperand = FuncCall->getArgOperand(0);
+        LDesc = IRB.CreateOr(Desc, ((uint64_t)ACCESS_ATOMIC << ACCESS_TYPE_SHIFT));
+        //AtomicCounter++;
+                             
+      } else if (auto ret = dyn_cast<ReturnInst>(inst)) {
+        Data = LaneID;
+        LDesc = IRB.CreateOr(Desc, ((uint64_t)ACCESS_RETURN << ACCESS_TYPE_SHIFT));
+      } else {
+        report_fatal_error("invalid access type encountered, this should not have happened");
       }
 
-      /*
-      IRB.SetInsertPoint(&F->front().back());
-      Value *LDesc = IRB.CreateOr(Desc, ((uint64_t)ACCESS_TEXECUTE << ACCESS_TYPE_SHIFT));
-      auto PtrToStore = IRB.CreatePtrToInt(PtrOperandExeRet,  IRB.getInt64Ty());
-      IRB.CreateCall(TraceCall,  {Records, Allocs, Commits, LDesc, PtrToStore, Slot});
-      */
-    }
 
-    void instrumentThreadLifetime(Function *F, ArrayRef<Instruction*> MemAccesses,
-				  TraceInfoValues *info) {
-	
-    }
-
-    bool runOnModule(Module &M) override {
-      bool isCUDA = M.getTargetTriple().find("nvptx") != std::string::npos;
-      if (!isCUDA) return false;
-
-      for (auto *kernel : getKernelFunctions(M)) {
-        auto accesses = collectGlobalMemAccesses(kernel);
-
-        TraceInfoValues info;
-        setupTraceInfo(kernel, &info);
-
-        instrumentKernel(kernel, accesses, &info);
+      if (PtrOperand != nullptr) {
+        Data = IRB.CreatePtrToInt(PtrOperand,  IRB.getInt64Ty());
+        auto PtrTy = dyn_cast<PointerType>(PtrOperand->getType());
+        LDesc = IRB.CreateOr(LDesc, (uint64_t) DL.getTypeStoreSize(PtrTy->getElementType()));
       }
+      Value *Clock = IRB.CreateCall(ClockASM);
+      IRB.CreateCall(TraceCall,  {Records, Allocs, Commits, LDesc, Data, Clock, Slot});
+    }
+  }
 
-      return true;
+  void instrumentThreadLifetime(Function *F, ArrayRef<Instruction*> MemAccesses,
+                                TraceInfoValues *info) {
+	
+  }
+
+  bool runOnModule(Module &M) override {
+    bool isCUDA = M.getTargetTriple().find("nvptx") != std::string::npos;
+    if (!isCUDA) return false;
+
+    for (auto *kernel : getKernelFunctions(M)) {
+      auto accesses = collectGlobalMemAccesses(kernel);
+
+      TraceInfoValues info;
+      setupTraceInfo(kernel, &info);
+
+      instrumentKernel(kernel, accesses, &info);
     }
 
-    void getAnalysisUsage(AnalysisUsage &AU) const override {
-    }
+    return true;
+  }
+
+  void getAnalysisUsage(AnalysisUsage &AU) const override {
+  }
 
 };
 char InstrumentDevicePass::ID = 0;
