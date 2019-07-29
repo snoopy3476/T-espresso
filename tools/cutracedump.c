@@ -66,21 +66,24 @@ int main(int argc, char** argv) {
       
       printf("warpid %" PRIu32 " %" PRIx32 " %" PRIu16, r->warp, 0, block_size);
 
+      // print mem
       for (uint8_t i = 0; i < r->addr_len; i++) {
-        int64_t increment = 0;
-        int8_t count = r->addr_unit[i].count;
-        if (count < 0) {
-          increment = r->size;
+        trace_record_addr_t *acc_addr = &r->addr_unit[i];
+        int64_t increment = acc_addr->offset;
+        int8_t count = acc_addr->count;
+        /*if (count < 0) {
+          increment = acc_addr->offset;
           count *= -1;
-        }
+          }*/
+        //printf("count: %d, offset: %d, increment: %ld\n", acc_addr->count, acc_addr->offset, increment);
         
         for (int8_t j = 0; j < count; j++) {
-          printf(" %"PRIx64, (r->addr_unit[i].addr) + increment*j);
+          printf(" %" PRIx64, (acc_addr->addr) + increment*j);
         }
       }
       
-      printf(" \t|sm|%"PRIu8"|\t|cta|%"PRIu32"/%"PRIu16"/%"PRIu16
-             "|\t|type|%s|\t|clk|%020"PRIu64"|\t|size|%"PRIu32"|\n",
+      printf(" \t|sm|%" PRIu8 "|\t|cta|%" PRIu32 "/%" PRIu16 "/%" PRIu16
+             "|\t|type|%s|\t|clk|%020" PRIu64 "|\t|size|%" PRIu32 "|\n",
              r->smid, r->ctaid.x, r->ctaid.y, r->ctaid.z,
              ACC_TYPE_NAMES[r->type],
              r->clock, r->size);

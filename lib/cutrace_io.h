@@ -153,7 +153,8 @@ void __trace_pack(const trace_record_t *record, record_t *buf) {
   //if (a++ < 10 ) printf("record->addr_len: %u\n", record->addr_len);
   for (uint8_t i = 0; i < record->addr_len; i++) {
     RECORD_ADDR(buf, i) = record->addr_unit[i].addr;
-    RECORD_ADDR_META(buf, i) = (record->addr_unit[i].offset << 8) | record->addr_unit[i].count;
+    RECORD_ADDR_META(buf, i) = (record->addr_unit[i].offset << 8) | ((int64_t)record->addr_unit[i].count & 0xFF);
+    //printf("%lu, %d, %d\n", RECORD_ADDR(buf, i), RECORD_GET_OFFSET(buf, i), RECORD_GET_COUNT(buf, i));
 
     //printf("%lx\n", RECORD_ADDR(buf, i));
   }
@@ -330,6 +331,7 @@ int trace_write_header(FILE *f, int version) {
 int trace_write_kernel(FILE *f, const char* name, uint16_t block_size) {
   //uint8_t bufmarker = 0x00;
   uint8_t name_len = strlen(name) & 0xFF;
+  //printf("Write kernel - %s, %d, %d\n", name, name_len, block_size);
   
   //printf("trace_write_kernel()\n");
   uint64_t header = ((uint64_t)name_len << 48) | ((uint64_t)block_size << 32);
@@ -359,6 +361,7 @@ int trace_write_record(FILE *f, const trace_record_t *record) {
     return 1;
   }
   */
+  //printf("Write record\n");
   char buf[TRACE_RECORD_SIZE(32)]; // mem space for addr_len == threads per warp
   __trace_pack(record, (record_t *)buf);
   if (fwrite(buf, RECORD_RAW_SIZE(record->addr_len), 1, f) < 1) {

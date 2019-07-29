@@ -212,27 +212,14 @@ protected:
     char newrecOrig[TRACE_RECORD_SIZE(32)] = {0};
     trace_record_t *const newrec = (trace_record_t *const) newrecOrig;
 
-    //static int limit_count = 0;
     
     trace_record_addr_t *acc_addr;
     // we know writing from the gpu stopped, so we avoid using the volatile
     // reference in the end condition
     for (int32_t i = 0; i < numRecords; ++i) {
 
-      //printf("DEBUG-%d (%d/%d)\n", 0, i, numRecords); ///////////////////////////////
-      //char buf[TRACE_RECORD_SIZE(32)];
       __trace_unpack((record_t *)&recordsPtr[i * RECORD_SIZE], newrec);
 /*
-      if (limit_count < 10) printf(
-        "\tNEWREC type: %u, size: %u, smid: %u, "
-        "ctaid: (%u, %u, %u), warp: %u, clock: %u, addr: %lx, alen: %u\n",
-        newrec->type, newrec->size,
-        newrec->smid, newrec->ctaid.x, newrec->ctaid.y, newrec->ctaid.z,
-        newrec->warp, newrec->clock, newrec->addr_unit->addr, newrec->addr_len);
-      
-      __trace_pack(newrec, (record_t *)buf);
-      __trace_unpack((record_t *)buf, newrec);
-      
       if (limit_count++ < 10) printf(
         "\tNEWREC type: %u, size: %u, smid: %u, "
         "ctaid: (%u, %u, %u), warp: %u, clock: %u, addr: %lx, alen: %u\n",
@@ -240,29 +227,8 @@ protected:
         newrec->smid, newrec->ctaid.x, newrec->ctaid.y, newrec->ctaid.z,
         newrec->warp, newrec->clock, newrec->addr_unit->addr, newrec->addr_len);
 */
-      /*
-      if (limit_count++ < 300) printf(
-        "\tNEWREC type: %u, size: %u, smid: %u, "
-        "ctaid: (%u, %u, %u), warp: %u, clock: %u, addr: %lx\n"
-        "\tACC    type: %u, size: %u, smid: %u, "
-        "ctaid: (%u, %u, %u), warp: %u, clock: %u, addr_len: %u, addr: %lx, ad_count: %u\n",
-        newrec->type, newrec->size,
-        newrec->smid, newrec->ctaid.x, newrec->ctaid.y, newrec->ctaid.z,
-        newrec->warp, newrec->clock, newrec->addr_unit->addr,
-        acc->type, acc->size),
-        acc->smid, acc->ctaid.x, acc->ctaid.y, acc->ctaid.z,
-        acc->warp, acc->clock, acc->addr_len, acc->addr_unit[acc->addr_len - 1].addr, acc->addr_unit[acc->addr_len - 1].count);
-      */
-    
-      //trace_write_record(out, newrec);
-      
-      //printf("DEBUG-%d\n", 1); ///////////////////////////////
       // if this is the first record, intialize it
       if (acc->addr_unit->count == 0) {
-        //printf("DEBUG-%d\n", 2); ///////////////////////////////
-        //if (!kernel_name)
-          //trace_write_kernel(out, kernel_name, 1302);
-        
 	memcpy(acc, newrec, sizeof(trace_record_t));
         //*acc = *newrec;
 	acc->addr_len = 1;
@@ -270,100 +236,48 @@ protected:
 	acc->addr_unit->count = 1;
 	acc->addr_unit->addr = newrec->addr_unit->addr;
 	compression_mode = 0;
-        //if (limit_count < 300) printf("Init\n");
-        /*
-        if (limit_count++ < 100) printf("Init\n"
-               "\tNEWREC type: %u, size: %u, smid: %u, "
-               "ctaid: (%u, %u, %u), warp: %u, clock: %u, addr: %lx\n"
-               "\tACC    type: %u, size: %u, smid: %u, "
-               "ctaid: (%u, %u, %u), warp: %u, clock: %u, addr_len: %u\n",
-               TRACE_GETTYPE(newrec->type_size), TRACE_GETSIZE(newrec->type_size),
-               newrec->smid, newrec->ctaid.x, newrec->ctaid.y, newrec->ctaid.z,
-               newrec->warp, newrec->clock, newrec->addr_unit->addr,
-               TRACE_GETTYPE(acc->type_size), TRACE_GETSIZE(acc->type_size),
-               acc->smid, acc->ctaid.x, acc->ctaid.y, acc->ctaid.z,
-               acc->warp, acc->clock, acc->addr_len);
-        */
-        //printf("DEBUG-%d\n", 3); ///////////////////////////////
-      } else { // otherwise see if we can increment or have to flush
-        //uint64_t currAddress = acc->addr_unit + (acc->size * acc->count);
+      }
 
-        //printf("DEBUG-%d\n", 4); ///////////////////////////////
-        // if second record, set compression mode when available
-        //printf("Else - %d\n", acc->addr_len);
+      // otherwise see if we can increment or have to flush
+      else {
+
+        // set compression info on second record of the addr_unit
         if (acc_addr->count == 1) {
-          //if (limit_count < 300) printf("First ");
-          if (newrec->addr_unit->addr == acc_addr->addr) {
-            //if (limit_count < 300) printf("(same) ");
+          int64_t offset = (int64_t)newrec->addr_unit->addr - (int64_t)acc_addr->addr;
+          if ((offset & 0xFFFFFFFFFF000000) == 0 ||
+              (offset & 0xFFFFFFFFFF000000) == 0xFFFFFFFFFF000000) {
+            acc_addr->offset = (int32_t) (offset & 0xFFFFFFFF);
             compression_mode = 1;
-          } else if (newrec->addr_unit->addr == acc_addr->addr +
-                     (acc->size * acc_addr->count)) {
-            //if (limit_count < 300) printf("(increment) ");
-            compression_mode = 2;
           }
-          //printf("DEBUG-%d\n", 5); ///////////////////////////////
-          
         }
 
-        
-        //printf("DEBUG-%d\n", 6); ///////////////////////////////
 
-        
+        // if same inst info with the record before - to be compressed
         if (newrec->type == acc->type && newrec->size == acc->size &&
 	    newrec->smid == acc->smid && newrec->ctaid.x == acc->ctaid.x &&
 	    newrec->ctaid.y == acc->ctaid.y && newrec->ctaid.z == acc->ctaid.z &&
 	    newrec->warp == acc->warp && newrec->clock == acc->clock) {
-	    
-          //printf("DEBUG-%d\n", 10); ///////////////////////////////
-          if ( (compression_mode == 1 && newrec->addr_unit->addr == acc_addr->addr) ||
-               (compression_mode == 2 && newrec->addr_unit->addr == acc_addr->addr +
-                (acc->size * acc_addr->count)) ) {
-            
+
+          // same inst info & addr pattern - increment current addr_unit count
+          if ( (compression_mode == 1 && newrec->addr_unit->addr == acc_addr->addr +
+                (acc_addr->offset * acc_addr->count)) ) {
             acc_addr->count += 1;
-            
-            //if (limit_count < 300) printf("Increment count\n");
-            //printf("DEBUG-%d\n", 11); ///////////////////////////////
-          } else {
-            //printf("DEBUG-%d\n", 12); ///////////////////////////////
+          }
 
-            // make count negative if past compression was increment mode
-            if (compression_mode == 2)
-              acc_addr->count *= -1;
-
+          // same inst info but new addr pattern - add new addr_unit
+          else {
             acc->addr_len += 1;
             acc_addr = &acc->addr_unit[acc->addr_len - 1];
             acc_addr->count = 1;
             acc_addr->addr = newrec->addr_unit->addr;
             compression_mode = 0;
-            
-            //if (limit_count < 300) printf("Concat\n");
-            
-            //printf("DEBUG-%d\n", 13); ///////////////////////////////
           }
 
+        }
 
-          
-          //printf("DEBUG-%d\n", 7); ///////////////////////////////
-          
-          } else {
-        //printf("DEBUG-%d\n", 8); ///////////////////////////////
-          // make count negative if past compression was increment mode
-          if (compression_mode == 2)
-            acc_addr->count *= -1;
-          /*
-          if (limit_count++ < 100) printf("Init (RE)\n"
-               "\tNEWREC type: %u, size: %u, smid: %u, "
-               "ctaid: (%u, %u, %u), warp: %u, clock: %u, addr: %lx\n"
-               "\tACC    type: %u, size: %u, smid: %u, "
-               "ctaid: (%u, %u, %u), warp: %u, clock: %u, addr_len: %u\n",
-               TRACE_GETTYPE(newrec->type_size), TRACE_GETSIZE(newrec->type_size),
-               newrec->smid, newrec->ctaid.x, newrec->ctaid.y, newrec->ctaid.z,
-               newrec->warp, newrec->clock, newrec->addr_unit->addr,
-               TRACE_GETTYPE(acc->type_size), TRACE_GETSIZE(acc->type_size),
-               acc->smid, acc->ctaid.x, acc->ctaid.y, acc->ctaid.z,
-               acc->warp, acc->clock, acc->addr_len);
-          */
-          //if (limit_count < 300) printf("RE-Init\n");
+
+        // if different inst info - add new inst info
+        else {
           trace_write_record(out, acc);
           
           memcpy(acc, newrec, TRACE_RECORD_SIZE(1));
@@ -372,7 +286,6 @@ protected:
           acc->addr_unit->count = 1;
           acc->addr_unit->addr = newrec->addr_unit->addr;
           compression_mode = 0;
-          //printf("DEBUG-%d\n", 9); ///////////////////////////////
         }
           
       }
