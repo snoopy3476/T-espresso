@@ -1,6 +1,6 @@
 set(LLVM_NO_RTTI 1)
 
-add_llvm_library(LLVMMemtrace MODULE
+add_llvm_library(LLVMCUDAProf MODULE
   MarkAllDeviceForInline.cpp
   LinkDeviceSupport.cpp
   InstrumentDevice.cpp
@@ -10,15 +10,15 @@ add_llvm_library(LLVMMemtrace MODULE
 
   RegisterStandardPasses.cpp
   )
-add_dependencies(LLVMMemtrace
+add_dependencies(LLVMCUDAProf
   memtrace-device-utils
   libmemtrace-host-o
   )
 
 if (LLVM_LINK_LLVM_DYLIB)
-  target_link_libraries(LLVMMemtrace PUBLIC LLVM)
+  target_link_libraries(LLVMCUDAProf PUBLIC LLVM)
 else ()
-  target_link_libraries(LLVMMemtrace PUBLIC
+  target_link_libraries(LLVMCUDAProf PUBLIC
     LLVMSupport
     LLVMCore
     LLVMScalarOpts

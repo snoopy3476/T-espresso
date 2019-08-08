@@ -59,7 +59,7 @@ int main(int argc, char** argv) {
         continue;
       }
       
-      printf("warpid %" PRIu32 " %" PRIx32 " %" PRIu16, r->warp, 0, block_size);
+      printf("warpid %" PRIu32 " %" PRIu32 " %" PRIu16, r->warp, r->instid, block_size);
 
       // print mem
       if (r->type == ACCESS_CALL || r->type == ACCESS_RETURN) {
@@ -92,10 +92,10 @@ int main(int argc, char** argv) {
         }
         
         printf(" \t|sm|%" PRIu8 "|\t|cta|%" PRIu32 "/%" PRIu16 "/%" PRIu16
-               "|\t|type|%s|\t|clk|%020" PRIu64 "|\t|size|%" PRIu32 "|\n",
+               "|\t|type|%s|\t|clk|%020" PRIu64 "|\t|size|%" PRIu32 "|\t|kernel|%s|\n",
                r->smid, r->ctaid.x, r->ctaid.y, r->ctaid.z,
                ACC_TYPE_NAMES[r->type],
-               r->clock, r->size);
+               r->clock, r->size, trace->kernel_name);
       }
 
     }

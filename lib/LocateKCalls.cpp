@@ -110,7 +110,87 @@ namespace llvm {
 
   LocateKCallsPass::LocateKCallsPass() : ModulePass(ID) {}
 
+  
+
+
+// Constant Definitions
+    //ConstantPointerNull* const_ptr_2 = ConstantPointerNull::get(Type::getInt8PtrTy(M.getContext()));
+    //ConstantPointerNull* const_ptr_2 = ConstantPointerNull::get(Constant::getNullValue(ArrayType::get(i8, 300)));
+
+// Global Variable Definitions
+    //gvar_ptr_abc->setInitializer(Constant::getNullValue(arty));
+    
+    //gvar_ptr_abc->setInitializer(ConstantAggregateZero::get(arty));
+
+    //gvar_ptr_abc->setInitializer(init);
+    
+    
+
+
+    /*
+      std::string* utf8string = new std::string("asdf");
+      Type *i8 = Type::getInt8Ty(M.getContext());
+      std::vector<llvm::Constant *> chars(utf8string->size()+1);
+      printf("%d\n", utf8string->size());
+      const char* curstr = utf8string->data();
+      printf("%s\n", curstr);
+      for(unsigned int i = 0; i < utf8string->size()+1; i++) {
+      chars[i] = ConstantInt::get(i8, curstr[i]);
+      //printf("%d\n", chars[i]));
+      }
+      printf("%d\n", chars.size());
+      Constant* init = ConstantArray::get(ArrayType::get(i8, chars.size()),
+      chars);
+
+      Constant* test = Constant::getNullValue(i8);
+    */
+    //ConstantDataArray cdatmp = new ConstantDataArray(Type::getInt8Ty(), curstr);
+    //printf("cdatmp: %s\n", cdatmp.getRawDataValues().data());
+    //printf("%s\n", init);
+
+    //GlobalVariable * v = getOrCreateGlobalVar(M, test->getType(), "ASDF");
+
+    /*
+    GlobalVariable *tmp = M.getNamedGlobal("ASDF");
+    if (tmp == nullptr || tmp->isNullValue())
+      printf("NULL\n");
+    */
+    
+    /*GlobalVariable *Global = M.getGlobalVariable("ASDF");
+    
+    if (Global->getInitializer()->isNullValue())
+      printf("NULL\n");
+    */
+    //Constant *zero = Constant::getNullValue(T)
+    /*
+    GlobalVariable *Global = new GlobalVariable(M, init->getType(), true, GlobalValue::LinkOnceAnyLinkage, init, "ASDF");
+    Global->setAlignment(8);
+    //Global->setInitializer(init);
+    assert(Global != nullptr);
+    */
+    //v->setInitializer(test);
+    /*GlobalVariable * v = 
+      new GlobalVariable(M, init->getType(), true,
+      GlobalVariable::ExternalLinkage, 0,
+      "ASDF");*/
+
+
+  
+    //Constant* tmp = M.getOrInsertGlobal("ASDF", init->getType());
+    //GlobalVariable* gVar = M.getNamedGlobal("ASDF");
+    //gVar->setAlignment(1);
+    //v->setInitializer(init);
+    //M.getOrInsertGlobal(v->getName(), v->getType());
+
+    //M.getOrInsertGloba
+    //return ConstantExpr::getBitCast(v, i8->getPointerTo());
+
+
+  
+  
+
   bool LocateKCallsPass::runOnModule(Module &M) {
+    //LocateKCallsPass::testGlobal(M);
     launches.clear();
     for (auto *configure : findConfigureCalls(M)) {
       Instruction* launch = findLaunchFor(configure);

@@ -9,4 +9,4 @@ Pass *createInstrumentDevicePass();
 
 Pass *createLinkHostSupportPass();
 Pass *createInstrumentHostPass();
-};
+}

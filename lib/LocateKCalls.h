@@ -22,6 +22,7 @@ public:
   static char ID;
   LocateKCallsPass();
   bool runOnModule(Module &M) override;
+  GlobalVariable* testGlobal(Module &M);
   void releaseMemory() override;
   SmallVector<KCall, 4> getLaunches() const;
   void print(raw_ostream &O, const Module *M) const override;

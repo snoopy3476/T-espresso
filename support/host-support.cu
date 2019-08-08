@@ -110,10 +110,17 @@ typedef struct kernel_trace_arg_t {
   uint16_t kernel_block_size;
 } kernel_trace_arg_t;
 
+//extern const char ___CUDATRACE_DEBUG_DATA[];
 
 class TraceConsumer {
 public:
+  //TraceConsumer(std::string suffix, const char* header_info) {
   TraceConsumer(std::string suffix) {
+
+    //printf("___CUDATRACE_DEBUG_DATA"); //
+    //printf(" (%p) = ", ___CUDATRACE_DEBUG_DATA); //
+    //printf("%s\n", ___CUDATRACE_DEBUG_DATA); //
+    
     this->suffix = suffix;
 
     cudaChecked(cudaHostAlloc(&RecordsHost, SLOTS_NUM * SLOTS_SIZE * RECORD_SIZE, cudaHostAllocMapped));
@@ -138,7 +145,8 @@ public:
       abort();
     }
 
-    trace_write_header(output, 3);
+    //trace_write_header(output, ___CUDATRACE_DEBUG_DATA);
+    trace_write_header(output);
   }
 
   virtual ~TraceConsumer() {
@@ -370,6 +378,7 @@ public:
   /** Creates a new consumer for a stream if necessary. Returns true if a new
    * consumer had to be created, false otherwise.
    */
+  //bool touchConsumer(cudaStream_t stream, const char* header_info) {
   bool touchConsumer(cudaStream_t stream) {
     for (auto &consumerPair : consumers) {
       if (consumerPair.first == stream) {
@@ -428,6 +437,7 @@ extern "C" {
   static void __trace_start_callback(cudaStream_t stream, cudaError_t status, void *vargs);
   static void __trace_stop_callback(cudaStream_t stream, cudaError_t status, void *vargs);
 
+  //void __trace_touch(cudaStream_t stream, const char *header_info) {
   void __trace_touch(cudaStream_t stream) {
     __trace_manager.touchConsumer(stream);
   }

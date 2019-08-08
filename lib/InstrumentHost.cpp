@@ -20,6 +20,7 @@
  *
  */
 
+
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Operator.h"
 
@@ -39,6 +40,7 @@
 #include "Common.h"
 
 #define DEBUG_TYPE "memtrace-host"
+#define TRACE_DEBUG_DATA "___CUDATRACE_DEBUG_DATA"
 
 using namespace llvm;
 
@@ -59,8 +61,10 @@ void createPrintf(IRBuilder<> &IRB, const Twine &fmt, ArrayRef<Value*> values) {
   IRB.CreateCall(Printf, args);
 }
 
+
 GlobalVariable* getOrCreateGlobalVar(Module &M, Type* T, const Twine &name) {
   // first see if the variable already exists
+  
   GlobalVariable *Global = M.getGlobalVariable(name.getSingleStringRef());
   if (Global) {
     return Global;
@@ -74,7 +78,7 @@ GlobalVariable* getOrCreateGlobalVar(Module &M, Type* T, const Twine &name) {
   assert(Global != nullptr);
   return Global;
 }
-
+  
 void RegisterVars(Function *CudaSetup, ArrayRef<GlobalVariable*> Variables) {
   Module &M = *CudaSetup->getParent();
   IRBuilder<> IRB(M.getContext());
@@ -119,6 +123,14 @@ void createAndRegisterTraceVars(Function* CudaSetup, Type* VarType) {
   Module &M = *CudaSetup->getParent();
   //SmallVector<Function*, 8> registeredKernels;
   SmallVector<GlobalVariable*, 8> globalVars;
+
+
+  //globalVars.push_back(testGlobal(M));
+
+  
+
+
+  
   for (Instruction &inst : instructions(CudaSetup)) {
     auto *call = dyn_cast<CallInst>(&inst);
     if (call == nullptr) {
@@ -181,7 +193,7 @@ struct InstrumentHost : public ModulePass {
       TraceCopyToSymbol = M.getOrInsertFunction("__trace_copy_to_symbol",
           voidTy, cuStreamPtrTy, voidPtrTy, voidPtrTy);
       TraceTouch = M.getOrInsertFunction("__trace_touch",
-          voidTy, cuStreamPtrTy);
+                                         voidTy, cuStreamPtrTy);
       TraceStart = M.getOrInsertFunction("__trace_start",
                                          voidTy, cuStreamPtrTy, stringTy, i16Ty);
       TraceStop = M.getOrInsertFunction("__trace_stop",
@@ -210,6 +222,7 @@ struct InstrumentHost : public ModulePass {
       Type* i16Ty = IRB.getInt16Ty();
       Type* i32Ty = IRB.getInt32Ty();
       Type* i64Ty = IRB.getInt64Ty();
+      Type* i8PtrTy = IRB.getInt8PtrTy();
 
       Value* kernelNameVal = IRB.CreateGlobalStringPtr(kernelName);
 
@@ -221,11 +234,18 @@ struct InstrumentHost : public ModulePass {
 
       GlobalVariable *globalVar = getOrCreateGlobalVar(M, GlobalVarType, kernelSymbolName);
 
-      auto *globalVarPtr = IRB.CreateBitCast(globalVar, IRB.getInt8PtrTy());
-      auto* streamPtr = IRB.CreateBitCast(stream, IRB.getInt8PtrTy());
+      auto *globalVarPtr = IRB.CreateBitCast(globalVar, i8PtrTy);
+      auto* streamPtr = IRB.CreateBitCast(stream, i8PtrTy);
 
 
+      // Get debug data
+      
+      //GlobalVariable* debugData = M.getNamedGlobal(TRACE_DEBUG_DATA);
+      //Constant *debugDataPtr = ConstantExpr::getBitCast(debugData, i8PtrTy);
+      //Constant *debugDataPtr = Constant::getNullValue(i8PtrTy);
+      //Value *debugDataPtr = IRB.CreateBitCast(debugData, i8PtrTy);
 
+  
       
       /*
       // dump all args of cudaConfigurecall
@@ -255,6 +275,28 @@ struct InstrumentHost : public ModulePass {
         ); // <uint16_t>(x*y) * <uint16_t>z
       
 
+      //Constant *gvarptr = ConstantExpr::getPointerCast(gvar->getInitializer(), IRB.getInt8PtrTy());
+
+      /*
+      std::vector<Constant*> const_ptr_7_indices;
+      ConstantInt* const_int32_8 = ConstantInt::get(IRB.getInt32Ty(), 0);
+      const_ptr_7_indices.push_back(const_int32_8);
+      const_ptr_7_indices.push_back(const_int32_8);
+      Constant* const_ptr_7 = ConstantExpr::getGetElementPtr(Type::getInt8PtrTy(M.getContext()), gvar, const_int32_8);
+      */
+      /*
+      ConstantInt* const_int32_8 = ConstantInt::get(IRB.getInt32Ty(), 0);
+
+      Constant* const_ptr_7 = ConstantExpr::getGetElementPtr(Type::getInt8PtrTy(M.getContext()), gvar, const_int32_8);
+      */
+      //Value* tmpval = M.getOrInsertGlobal("TRACE_DEBUG_INFO_RAW", gvar->getType());
+
+      //BitCastInst bcinst(tmpval, IRB.getInt8PtrTy());
+
+
+      //tmpval->dump();
+
+
       
       IRB.CreateCall(TraceTouch, {streamPtr});
       IRB.CreateCall(TraceStart, {streamPtr, kernelNameVal, blockSize});
@@ -274,8 +316,11 @@ struct InstrumentHost : public ModulePass {
     }
 
     bool runOnModule(Module &M) override {
+      
       bool isCUDA = M.getTargetTriple().find("nvptx") != std::string::npos;
       if (isCUDA) return false;
+
+      
 
       traceInfoTy = getTraceInfoType(M.getContext());
 

@@ -47,6 +47,8 @@ include_directories(
   BEFORE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
   ${CMAKE_CURRENT_BINARY_DIR}/include
+  ${CMAKE_BINARY_DIR}/tools/clang/include
+  ${LLVM_MAIN_SRC_DIR}/tools/clang/include
   )
 
 add_definitions( -D_GNU_SOURCE )
