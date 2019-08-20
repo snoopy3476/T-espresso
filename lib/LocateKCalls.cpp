@@ -190,7 +190,6 @@ namespace llvm {
   
 
   bool LocateKCallsPass::runOnModule(Module &M) {
-    //LocateKCallsPass::testGlobal(M);
     launches.clear();
     for (auto *configure : findConfigureCalls(M)) {
       Instruction* launch = findLaunchFor(configure);

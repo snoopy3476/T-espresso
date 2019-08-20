@@ -149,6 +149,7 @@ PointerKind getPointerKind(Value* val, bool isKernel) {
 }
 
 
+
 /******************************************************************************
  * Device instrumentation pass.
  * It performs 3 fundamental steps for each kernel:
@@ -164,7 +165,9 @@ PointerKind getPointerKind(Value* val, bool isKernel) {
 // Needs to be a ModulePass because we modify the global variables.
 struct InstrumentDevicePass : public ModulePass {
   static char ID;
-  InstrumentDevicePass() : ModulePass(ID) {}
+  const bool TraceThread, TraceMem;
+
+  InstrumentDevicePass(bool TraceThreadInput = true, bool TraceMemInput = true) : ModulePass(ID), TraceThread(TraceThreadInput), TraceMem(TraceMemInput) { }
 
   struct TraceInfoValues {
     Value *Allocs;
@@ -480,18 +483,18 @@ struct InstrumentDevicePass : public ModulePass {
 
   
   
-#define ESCAPE_DIR_CHAR '='
-#define ESCAPE_DIR_TO_STR "=="
+#define ESCAPE_DIR_CHAR '#'
+#define ESCAPE_DIR_TO_STR "_#"
 #define DIR_DUP_STR "//"
 #define DIR_DUP_TO_STR "/"
 #define DIR_CHAR '/'
-#define DIR_TO_STR "=-"
+#define DIR_TO_STR "##"
 #define DEBUG_DATA "debuginfo.txt"
 #define DEBUG_TMP_DATA_PREFIX "debuginfo-"
 
   std::string getModuleID(std::string ModuleID) {
 
-    // "=" to "=="
+    // "#" to "_#"
     size_t pos = (size_t)-2;
     while ((pos = ModuleID.find(ESCAPE_DIR_CHAR, pos+2)) != std::string::npos)
       ModuleID = ModuleID.replace(pos, 1, ESCAPE_DIR_TO_STR);
@@ -501,7 +504,7 @@ struct InstrumentDevicePass : public ModulePass {
     while ((pos = ModuleID.find(DIR_DUP_STR, pos)) != std::string::npos)
       ModuleID = ModuleID.replace(pos, 2, DIR_DUP_TO_STR);
 
-    // "/" to "=-"
+    // "/" to "##"
     pos = (size_t)-2;
     while ((pos = ModuleID.find(DIR_CHAR, pos+2)) != std::string::npos)
       ModuleID = ModuleID.replace(pos, 1, DIR_TO_STR);
@@ -513,10 +516,14 @@ struct InstrumentDevicePass : public ModulePass {
   }
   
 
-
   
   bool runOnModule(Module &M) override {
     //M.getContext().getOption<typename ValT, typename Base, ValT (Base::*Mem)>();
+    //printf("%d\n", TestInt++);
+    //pass_registry->getPassInfo(const void *TI);
+
+    LLVMContext &ctx = M.getContext();
+    
 
   
     bool isCUDA = M.getTargetTriple().find("nvptx") != std::string::npos;
@@ -533,19 +540,22 @@ struct InstrumentDevicePass : public ModulePass {
     
     for (auto *kernel : getKernelFunctions(M)) {
       
-      auto retinsts = collectReturnInst(kernel);
       auto accesses = collectGlobalMemAccesses(kernel);
-
-      debugWithoutProblem &= setupAndGetDebugInfo(kernel, debug_info, accesses);
-
+      auto retinsts = collectReturnInst(kernel);
+      
       TraceInfoValues info;
       IRBuilderBase::InsertPoint ipfront = setupTraceInfo(kernel, &info);
-
-      instrumentScheduling(kernel, ipfront, retinsts, &info);
-      instrumentMemAccess(kernel, accesses, &info);
-
       
-      //clang::FrontendOptions::PluginArgs; //////////////////////////////
+      
+      if (TraceMem) {
+        debugWithoutProblem &= setupAndGetDebugInfo(kernel, debug_info, accesses);
+        instrumentMemAccess(kernel, accesses, &info);
+      }
+
+      if (TraceThread) {
+        instrumentScheduling(kernel, ipfront, retinsts, &info);
+      }
+      
     }
     
     std::ofstream debug_info_fs(ModuleID);
@@ -566,8 +576,8 @@ struct InstrumentDevicePass : public ModulePass {
 char InstrumentDevicePass::ID = 0;
 
 namespace llvm {
-  Pass *createInstrumentDevicePass() {
-    return new InstrumentDevicePass();
+  Pass *createInstrumentDevicePass(bool TraceThread, bool TraceMem) {
+    return new InstrumentDevicePass(TraceThread, TraceMem);
   }
 }
 
