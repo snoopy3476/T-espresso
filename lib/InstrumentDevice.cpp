@@ -1,3 +1,5 @@
+#include "Passes.h"
+
 #include "llvm/Pass.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/raw_ostream.h"
@@ -10,13 +12,6 @@
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
-/*
-#include "clang/Frontend/FrontendAction.h"
-#include "clang/Frontend/FrontendOptions.h"
-#include "clang/Frontend/CompilerInstance.h"
-#include "clang/AST/ASTConsumer.h"
-#include "clang/Frontend/FrontendPluginRegistry.h"
-*/
 
 #include <set>
 #include <iostream>
@@ -35,12 +30,6 @@
 #define ADDRESS_SPACE_CONSTANT 4
 #define ADDRESS_SPACE_LOCAL 5
 
-/*
-#include "clang/AST/AST.h"
-#include "clang/AST/RecursiveASTVisitor.h"
-#include "clang/Frontend/CompilerInstance.h"
-#include "llvm/Support/raw_ostream.h"
-*/
 #include "llvm/IR/IntrinsicInst.h"
 
 using namespace llvm;
@@ -181,9 +170,9 @@ PointerKind getPointerKind(Value* val, bool isKernel) {
 // Needs to be a ModulePass because we modify the global variables.
 struct InstrumentDevicePass : public ModulePass {
   static char ID;
-  const bool TraceThread, TraceMem;
+  InstrumentPassArg args;
 
-  InstrumentDevicePass(bool TraceThreadInput = true, bool TraceMemInput = true) : ModulePass(ID), TraceThread(TraceThreadInput), TraceMem(TraceMemInput) { }
+  InstrumentDevicePass(InstrumentPassArg passargs = args_default) : ModulePass(ID), args(passargs) { }
 
   struct TraceInfoValues {
     Value *Allocs;
@@ -286,21 +275,22 @@ struct InstrumentDevicePass : public ModulePass {
     // '-g' option needed for debug info!
     uint32_t inst_id = 0;
     for (Instruction* inst : inst_list) {
+      
+      inst_id++; // id starts from 1
+
+      // set inst info
+      trace_header_inst_t *inst_header = &kernel_header->insts[inst_id - 1];
+      inst_header->inst_id = inst_id;
+
+      // set inst debug info
       const DebugLoc &loc = inst->getDebugLoc();
       if (loc) {
-        inst_id++; // id starts from 1
-
-        trace_header_inst_t *inst_header = &kernel_header->insts[inst_id - 1];
-        
-
-        // append inst info
         std::string inst_path = loc->getFilename().str();
         while (inst_path.find("./") == 0) // remove leading "./" in path if exists
           inst_path.erase(0, 2);
         int inst_path_len = std::min(inst_path.length(), (size_t)0xFF);
 
         
-        inst_header->inst_id = inst_id;
         inst_header->row = loc->getLine();
         inst_header->col = loc->getColumn();
         inst_header->inst_filename_len = inst_path_len;
@@ -565,15 +555,37 @@ struct InstrumentDevicePass : public ModulePass {
     bool isCUDA = M.getTargetTriple().find("nvptx") != std::string::npos;
     if (!isCUDA) return false;
 
+    
+    // if kernel args is set, kernel filtering is enabled
+    bool kernel_filtering = (args.kernel.size() != 0);
+    
 
-    bool debugWithoutProblem = true;
+    bool debug_without_problem = true; // All debug data is written without problem
     std::vector<char> debug_data;
     for (auto *kernel : getKernelFunctions(M)) {
-      DISubprogram * kernel_debuginfo = kernel->getSubprogram();
-      std::string kernel_name_orig;
-      if (kernel_debuginfo) {
-        kernel_name_orig = kernel_debuginfo->getName().str();
+      std::string kernel_name_sym = kernel->getName().str();
+
+      
+      // kernel filtering
+      
+      if (kernel_filtering) {
+        DISubprogram * kernel_debuginfo = kernel->getSubprogram();
+        std::string kernel_name_orig;
+        if (kernel_debuginfo) {
+          kernel_name_orig = kernel_debuginfo->getName().str();
+        }
+
+        // stop instrumenting if not listed on enabled kernel
+        if (std::find(args.kernel.begin(), args.kernel.end(), kernel_name_sym) == args.kernel.end() &&
+            std::find(args.kernel.begin(), args.kernel.end(), kernel_name_orig) == args.kernel.end()) {
+          continue;
+        }
+        
+        fprintf(stderr, "cuprof: Selective kernel tracing enabled (%s)\n", kernel_name_sym.c_str());
       }
+
+
+      // kernel instrumentation
       
       auto accesses = collectGlobalMemAccesses(kernel);
       auto retinsts = collectReturnInst(kernel);
@@ -582,21 +594,21 @@ struct InstrumentDevicePass : public ModulePass {
       IRBuilderBase::InsertPoint ipfront = setupTraceInfo(kernel, &info);
       
       
-      if (TraceMem) {
-        debugWithoutProblem &= setupAndGetKernelDebugData(kernel, debug_data, accesses);
+      if (args.trace_mem) {
+        debug_without_problem &= setupAndGetKernelDebugData(kernel, debug_data, accesses);
         instrumentMemAccess(kernel, accesses, &info);
       }
 
-      if (TraceThread) {
+      if (args.trace_thread) {
         instrumentScheduling(kernel, ipfront, retinsts, &info);
       }
 
       
-      setDebugData(M, debug_data, kernel->getName());
+      setDebugData(M, debug_data, kernel_name_sym);
       debug_data.clear();
     }
     
-    if (!debugWithoutProblem) {
+    if (!debug_without_problem) {
       std::cerr << "cuprof: No memory access data for \""
                 << M.getModuleIdentifier()
                 << "\" found! Check if \"-g\" option is set.\n";
@@ -612,8 +624,8 @@ struct InstrumentDevicePass : public ModulePass {
 char InstrumentDevicePass::ID = 0;
 
 namespace llvm {
-  Pass *createInstrumentDevicePass(bool TraceThread, bool TraceMem) {
-    return new InstrumentDevicePass(TraceThread, TraceMem);
+  Pass *createInstrumentDevicePass(InstrumentPassArg args) {
+    return new InstrumentDevicePass(args);
   }
 }
 

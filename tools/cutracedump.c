@@ -96,8 +96,6 @@ int main(int argc, char** argv) {
         continue;
       }
 
-      trace_header_inst_t * inst_info = kernel_info->inst_by_id[r->instid];
-
       char trace_type;
       switch(r->type) {
       case RECORD_EXECUTE:
@@ -128,6 +126,7 @@ int main(int argc, char** argv) {
 
       // print mem access info
       if (trace_type == 'M') {
+        trace_header_inst_t * inst_info = kernel_info->inst_by_id[r->instid];
 
         // size
         printf(" %" PRIu32, r->size);
@@ -146,10 +145,16 @@ int main(int argc, char** argv) {
           }
         }
 
-        // access data
-        printf(" %" PRIu32 " %s %" PRIu32 " %" PRIu32 " %s",
-               inst_info->inst_id, kernel_info->kernel_name,
-               inst_info->row, inst_info->col, inst_info->inst_filename);
+        // inst id
+        printf(" %" PRIu32 " %s",
+               inst_info->inst_id, kernel_info->kernel_name);
+
+        // position at src file
+        if (inst_info->inst_filename_len > 0) {
+          printf(" %" PRIu32 " %" PRIu32 " %s",
+                 inst_info->row, inst_info->col, inst_info->inst_filename);
+        }
+
       }
 
       printf("\n");

@@ -20,6 +20,8 @@
  *
  */
 
+#include "Passes.h"
+
 #include <set>
 #include <cuda_runtime_api.h>
 
@@ -31,6 +33,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InstIterator.h"
+#include "llvm/IR/DebugInfoMetadata.h"
 
 
 #include "LocateKCalls.h"
@@ -78,9 +81,11 @@ Instruction* createMalloc(IRBuilder<> &IRB, Type *ty,
   
 
 
-struct InstrumentHost : public ModulePass {
+struct InstrumentHostPass : public ModulePass {
   static char ID;
-  InstrumentHost() : ModulePass(ID) {}
+  InstrumentPassArg args;
+  
+  InstrumentHostPass(InstrumentPassArg passargs = args_default) : ModulePass(ID), args(passargs) {}
 
   Type* traceInfoTy = nullptr;
   Type *SizeTy = nullptr;
@@ -512,13 +517,46 @@ struct InstrumentHost : public ModulePass {
 
     
 
+    // if kernel args is set, kernel filtering is enabled
+    bool kernel_filtering = (args.kernel.size() != 0);
+
+    // kernels called
     kernelListSet kernel_list(&setStrComparator);
 
     // patch calls && collect kernels called
     for (auto &kcall : getAnalysis<LocateKCallsPass>().getLaunches()) {
+      std::string kernel_name_sym = StringRef(kcall.kernelName).str();
+
+      
+      // kernel filtering
+
+      CallInst *kernel_call = dyn_cast<CallInst>(kcall.kernelLaunch);
+      Function *kernel = nullptr;
+      if (kernel_call) {
+        kernel = kernel_call->getCalledFunction();
+      }
+      
+      if (kernel && kernel_filtering) {
+        DISubprogram * kernel_debuginfo = kernel->getSubprogram();
+        std::string kernel_name_orig;
+        if (kernel_debuginfo) {
+          kernel_name_orig = kernel_debuginfo->getName().str();
+        }
+
+        // stop instrumenting if not listed on enabled kernel
+        if (std::find(args.kernel.begin(), args.kernel.end(), kernel_name_sym) == args.kernel.end() &&
+            std::find(args.kernel.begin(), args.kernel.end(), kernel_name_orig) == args.kernel.end()) {
+          continue;
+        }
+      }
+
+      
+      // patch kernel call
       patchKernelCall(kcall.configureCall, kcall.kernelLaunch, kcall.kernelName);
 
-      kernel_list.insert(StringRef(kcall.kernelName).str());
+      
+      // insert kernel to list
+      kernel_list.insert(kernel_name_sym);
     }
 
     Function* CudaSetup = M.getFunction("__cuda_register_globals");
@@ -543,12 +581,12 @@ struct InstrumentHost : public ModulePass {
 
 };
 
-char InstrumentHost::ID = 0;
+char InstrumentHostPass::ID = 0;
 
 namespace llvm {
-  Pass *createInstrumentHostPass() {
-    return new InstrumentHost();
+  Pass *createInstrumentHostPass(InstrumentPassArg args) {
+    return new InstrumentHostPass(args);
   }
 }
 
-static RegisterPass<InstrumentHost> X("memtrace-host", "inserts host-side instrumentation for mem-traces", false, false);
+static RegisterPass<InstrumentHostPass> X("memtrace-host", "inserts host-side instrumentation for mem-traces", false, false);

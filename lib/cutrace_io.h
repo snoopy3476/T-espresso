@@ -213,14 +213,14 @@ extern "C" {
       trace_last_error = "failed to read trace header";
       return NULL;
     }
+
     
     trace_t *res = (trace_t*) malloc(offsetof(trace_t, record) + TRACE_RECORD_SIZE(32));
-
     res->kernel_accdat = (trace_header_kernel_t **) malloc(sizeof(trace_header_kernel_t*) * 256);
 
     
     // build memory access data for each kernels
-    uint64_t kernel_count = 0;
+    uint64_t kernel_count;
     for (kernel_count = 0;
          fread(delim_buf, 4, 1, f) == 1 && memcmp(delim_buf, cuprof_header_postfix, 4) != 0;
          kernel_count++) {
@@ -279,7 +279,8 @@ extern "C" {
         unserialize_int(&inst_cur->col, 4, inst_buf);
 
         // inst filename
-        validity &= (fread(inst_cur->inst_filename, inst_cur->inst_filename_len, 1, f) == 1 ? 1 : 0);
+        if (inst_cur->inst_filename_len > 0)
+          validity &= (fread(inst_cur->inst_filename, inst_cur->inst_filename_len, 1, f) == 1 ? 1 : 0);
 
 
         // map inst to inst_by_id

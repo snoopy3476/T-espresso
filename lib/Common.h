@@ -16,28 +16,28 @@ typedef struct {
   ((32 + (12 * (addr_len))) * sizeof(char))
 
 #define RECORD_GET_ALEN(record) \
-  (((uint64_t*)record)[0] >> 56)
+  (((const uint64_t*)record)[0] >> 56)
 #define RECORD_GET_TYPE(record) \
-  ((((uint64_t*)record)[0] >> 48) & 0xFF)
+  ((((const uint64_t*)record)[0] >> 48) & 0xFF)
 #define RECORD_GET_SMID(record) \
-  ((((uint64_t*)record)[0] >> 32) & 0xFFFF)
+  ((((const uint64_t*)record)[0] >> 32) & 0xFFFF)
 #define RECORD_GET_WARP(record) \
-  (((uint64_t*)record)[0] & 0xFFFFFFFF)
+  (((const uint64_t*)record)[0] & 0xFFFFFFFF)
 
 #define RECORD_GET_CTAX(record) \
-  (((uint64_t*)record)[1] >> 32)
+  (((const uint64_t*)record)[1] >> 32)
 #define RECORD_GET_CTAY(record) \
-  ((((uint64_t*)record)[1] >> 16) & 0xFFFF)
+  ((((const uint64_t*)record)[1] >> 16) & 0xFFFF)
 #define RECORD_GET_CTAZ(record) \
-  (((uint64_t*)record)[1] & 0xFFFF)
+  (((const uint64_t*)record)[1] & 0xFFFF)
   
 #define RECORD_GET_CLOCK(record) \
-  (((uint64_t*)record)[2])
+  (((const uint64_t*)record)[2])
   
 #define RECORD_GET_SIZE(record) \
-  (((uint64_t*)record)[3] >> 32)
+  (((const uint64_t*)record)[3] >> 32)
 #define RECORD_GET_INSTID(record) \
-  (((uint64_t*)record)[3] & 0xFFFFFFFF)
+  (((const uint64_t*)record)[3] & 0xFFFFFFFF)
 
   
 #define RECORD_ADDR_PTR(record, idx) \
@@ -51,9 +51,9 @@ typedef struct {
 #define RECORD_ADDR_META(record, idx) \
   (*(uint32_t*)RECORD_META_PTR(record, idx))
 #define RECORD_GET_COUNT(record, idx) \
-  ((int8_t)((*(uint32_t*)RECORD_META_PTR(record, idx)) & 0xFF))
+  ((int8_t)((*(const uint32_t*)RECORD_META_PTR(record, idx)) & 0xFF))
 #define RECORD_GET_OFFSET(record, idx) \
-  ((*(int32_t*)RECORD_META_PTR(record, idx)) >> 8)
+  ((*(const int32_t*)RECORD_META_PTR(record, idx)) >> 8)
 
 #define RECORD_SET_INIT(addr_len, type, smid, warp, \
                         cta_x, cta_y, cta_z, \
