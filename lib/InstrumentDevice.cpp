@@ -6,6 +6,7 @@
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/DebugLoc.h"
 #include "llvm/IR/DebugInfoMetadata.h"
+#include "llvm/IR/Constants.h"
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -22,10 +23,10 @@
 #include <fstream>
 
 #define INCLUDE_LLVM_MEMTRACE_STUFF
-#include "Common.h"
+#include "cutrace_io.h"
 
 #define DEBUG_TYPE "memtrace-device"
-#define TRACE_DEBUG_DATA "___CUDATRACE_DEBUG_DATA"
+#define TRACE_DEBUG_DATA "___cuprof_accdat_instmd"
 
 #define ADDRESS_SPACE_GENERIC 0
 #define ADDRESS_SPACE_GLOBAL 1
@@ -40,8 +41,10 @@
 #include "clang/Frontend/CompilerInstance.h"
 #include "llvm/Support/raw_ostream.h"
 */
+#include "llvm/IR/IntrinsicInst.h"
 
 using namespace llvm;
+
 
 /******************************************************************************
  * Various helper functions
@@ -58,8 +61,21 @@ Constant *getOrInsertTraceDecl(Module &M) {
   Type *i64Ty = Type::getInt64Ty(ctx);
   Type *i32Ty = Type::getInt32Ty(ctx);
 
-  return M.getOrInsertFunction("__mem_trace", voidTy,
-			       i8PtrTy, i8PtrTy, i8PtrTy, i64Ty, i64Ty, i64Ty, i32Ty, i32Ty);
+  return M.getOrInsertFunction("___cuprof_trace", voidTy,
+			       i8PtrTy, i8PtrTy, i8PtrTy,
+                               i64Ty, i64Ty, i64Ty, i32Ty, i32Ty);
+}
+
+Constant *getOrInsertSetDebugDataDecl(Module &M) {
+  LLVMContext &ctx = M.getContext();
+
+  Type *voidTy = Type::getVoidTy(ctx);
+  Type *i8PtrTy = Type::getInt8PtrTy(ctx);
+  Type *i32Ty = Type::getInt32Ty(ctx);
+  Type *i64Ty = Type::getInt64Ty(ctx);
+
+  return M.getOrInsertFunction("___cuprof_set_accdat", voidTy,
+			       i8PtrTy, i64Ty);
 }
 
 std::vector<Function*> getKernelFunctions(Module &M) {
@@ -173,7 +189,6 @@ struct InstrumentDevicePass : public ModulePass {
     Value *Allocs;
     Value *Commits;
     Value *Records;
-
     Value *Desc;
     Value *Slot;
   };
@@ -206,7 +221,7 @@ struct InstrumentDevicePass : public ModulePass {
           if (calleeName.startswith("llvm.nvvm.atomic")) {
             // ATOMIC Inc/Dec //
             kind = getPointerKind(call->getArgOperand(0), true);
-          } else if ( calleeName == "__mem_trace") {
+          } else if ( calleeName == "___cuprof_trace") {
             report_fatal_error("already instrumented!");
           } else if ( !calleeName.startswith("llvm.") ) {
             std::string error = "call to non-intrinsic: ";
@@ -238,36 +253,79 @@ struct InstrumentDevicePass : public ModulePass {
     return result;
   }
 
+
+
   
 
-  bool setupAndGetDebugInfo(Function* kernel, std::string& debug_info, std::vector<Instruction*> inst_list) {
+  bool setupAndGetKernelDebugData(Function* kernel, std::vector<char>& debug_data, std::vector<Instruction*> inst_list) {
     LLVMContext &ctx = kernel->getParent()->getContext();
     bool debugInfoNotFound = false;
-    
-    debug_info = debug_info.append("<" + kernel->getName().str() + ">\n");
+    //char serialbuf[8] = {0};
+
+    //uint64_t data_size = 0;
+
+    uint64_t kernel_header_size =
+      sizeof(trace_header_kernel_t) +
+      sizeof(trace_header_inst_t) * inst_list.size() +
+      4;
+    trace_header_kernel_t * kernel_header =
+      (trace_header_kernel_t *) malloc(kernel_header_size);
+    if (!kernel_header) {
+      fprintf(stderr, "cuprof: Failed to build debug data!\n");
+      abort();
+    }
+    memset(kernel_header, 0, kernel_header_size);
+
+
+    // append kernel info
+    std::string kernel_name = kernel->getName().str();
+    uint8_t kernel_name_len = std::min(kernel_name.length(), (size_t)0xFF);
+    memcpy(kernel_header->kernel_name, kernel_name.c_str(), kernel_name_len);
+    kernel_header->kernel_name_len = kernel_name_len;
 
     // '-g' option needed for debug info!
-    int inst_id = 1;
+    uint32_t inst_id = 0;
     for (Instruction* inst : inst_list) {
-      //printf("[%s] ", inst->getOpcodeName());
-      debug_info = debug_info.append("\t[" + std::to_string(inst_id) + "] ");
       const DebugLoc &loc = inst->getDebugLoc();
       if (loc) {
-        debug_info = debug_info.append(inst->getOpcodeName()).append(
-          (" " + loc->getDirectory() + "/" + loc->getFilename() + " : (" +
-           std::to_string(loc->getLine()) + "," +
-           std::to_string(loc->getColumn()) + ")\n").str());
+        inst_id++; // id starts from 1
+
+        trace_header_inst_t *inst_header = &kernel_header->insts[inst_id - 1];
+        
+
+        // append inst info
+        std::string inst_path = loc->getFilename().str();
+        while (inst_path.find("./") == 0) // remove leading "./" in path if exists
+          inst_path.erase(0, 2);
+        int inst_path_len = std::min(inst_path.length(), (size_t)0xFF);
+
+        
+        inst_header->inst_id = inst_id;
+        inst_header->row = loc->getLine();
+        inst_header->col = loc->getColumn();
+        inst_header->inst_filename_len = inst_path_len;
+        memcpy(inst_header->inst_filename, inst_path.c_str(), inst_path_len);
+
       } else {
         debugInfoNotFound = true;
-        debug_info = debug_info.append("(no info)\n");
       }
 
       MDNode* metadata = MDNode::get(ctx, MDString::get(ctx, std::to_string(inst_id)));
       inst->setMetadata(TRACE_DEBUG_DATA, metadata);
 
-      inst_id++;
     }
-    debug_info = debug_info.append("\n");
+    kernel_header->insts_count = inst_id;
+
+    
+    char * kernel_data = (char *) malloc(get_max_header_size_after_packed(kernel_header));
+    size_t kernel_data_size = header_pack(kernel_data, kernel_header);
+    debug_data.reserve(debug_data.size() + kernel_data_size);
+    debug_data.insert(debug_data.end(),
+                      kernel_data,
+                      kernel_data + kernel_data_size);
+
+    free(kernel_data);
+    
 
     return !debugInfoNotFound;
   }
@@ -286,14 +344,7 @@ struct InstrumentDevicePass : public ModulePass {
     //errs() << "creating device symbol " << symbolName << "\n";
     auto* globalVar = defineDeviceGlobal(M, traceInfoTy, symbolName);
     assert(globalVar != nullptr);
-
-    // Execution Clock
-    IntegerType* I64Type = IntegerType::get(M.getContext(), 64);
-    FunctionType *I64FnTy = FunctionType::get(I64Type, false);
-    InlineAsm *ClockASM = InlineAsm::get(I64FnTy,
-                                         "mov.u64 $0, %clock64;", "=l", true,
-                                         InlineAsm::AsmDialect::AD_ATT );
-    //Value *Clock = IRB.CreateCall(ClockASM);
+    
 
     Value *AllocsPtr = IRB.CreateStructGEP(nullptr, globalVar, 0);
     Value *Allocs = IRB.CreateLoad(AllocsPtr, "allocs");
@@ -337,7 +388,7 @@ struct InstrumentDevicePass : public ModulePass {
 
     Constant* TraceCall = getOrInsertTraceDecl(M);
     if (!TraceCall) {
-      report_fatal_error("No __mem_trace declaration found");
+      report_fatal_error("No ___cuprof_trace declaration found");
     }
 
 
@@ -366,28 +417,28 @@ struct InstrumentDevicePass : public ModulePass {
       
       if (auto li = dyn_cast<LoadInst>(inst)) {
         PtrOperand = li->getPointerOperand();
-        LDesc = IRB.CreateOr(Desc, ((uint64_t)ACCESS_LOAD << ACCESS_TYPE_SHIFT));
+        LDesc = IRB.CreateOr(Desc, ((uint64_t)RECORD_LOAD << RECORD_TYPE_SHIFT));
                              
       } else if (auto si = dyn_cast<StoreInst>(inst)) {
         PtrOperand = si->getPointerOperand();
-        LDesc = IRB.CreateOr(Desc, ((uint64_t)ACCESS_STORE << ACCESS_TYPE_SHIFT));
+        LDesc = IRB.CreateOr(Desc, ((uint64_t)RECORD_STORE << RECORD_TYPE_SHIFT));
                              
       } else if (auto ai = dyn_cast<AtomicRMWInst>(inst)) {
         // ATOMIC Add/Sub/Exch/Min/Max/And/Or/Xor //
         PtrOperand = ai->getPointerOperand();
-        LDesc = IRB.CreateOr(Desc, ((uint64_t)ACCESS_ATOMIC << ACCESS_TYPE_SHIFT));
+        LDesc = IRB.CreateOr(Desc, ((uint64_t)RECORD_ATOMIC << RECORD_TYPE_SHIFT));
                              
       } else if (auto ai = dyn_cast<AtomicCmpXchgInst>(inst)) {
         // ATOMIC CAS //
         PtrOperand = ai->getPointerOperand();
-        LDesc = IRB.CreateOr(Desc, ((uint64_t)ACCESS_ATOMIC << ACCESS_TYPE_SHIFT));
+        LDesc = IRB.CreateOr(Desc, ((uint64_t)RECORD_ATOMIC << RECORD_TYPE_SHIFT));
                              
       } else if (auto *FuncCall = dyn_cast<CallInst>(inst)) {
         // ATOMIC Inc/Dec //
         assert(FuncCall->getCalledFunction()->getName()
                .startswith("llvm.nvvm.atomic"));
         PtrOperand = FuncCall->getArgOperand(0);
-        LDesc = IRB.CreateOr(Desc, ((uint64_t)ACCESS_ATOMIC << ACCESS_TYPE_SHIFT));
+        LDesc = IRB.CreateOr(Desc, ((uint64_t)RECORD_ATOMIC << RECORD_TYPE_SHIFT));
                              
       } else {
         report_fatal_error("invalid access type encountered, this should not have happened");
@@ -421,10 +472,8 @@ struct InstrumentDevicePass : public ModulePass {
     
     Constant* TraceCall = getOrInsertTraceDecl(M);
     if (!TraceCall) {
-      report_fatal_error("No __mem_trace declaration found");
+      report_fatal_error("No ___cuprof_trace declaration found");
     }
-
-    //const DataLayout &DL = F->getParent()->getDataLayout();
     
     auto Allocs = info->Allocs;
     auto Commits = info->Commits;
@@ -432,7 +481,6 @@ struct InstrumentDevicePass : public ModulePass {
     auto Slot = info->Slot;
     auto Desc = info->Desc;
 
-    //IRBuilder<> IRB(F->front().getFirstNonPHI());
 
 
     IntegerType* I32Type = IntegerType::get(M.getContext(), 32);
@@ -456,7 +504,7 @@ struct InstrumentDevicePass : public ModulePass {
 
     // trace call
     Value *Clock = IRB.CreateCall(ClockASM);
-    Value *LDesc = IRB.CreateOr(Desc, ((uint64_t)ACCESS_CALL << ACCESS_TYPE_SHIFT));
+    Value *LDesc = IRB.CreateOr(Desc, ((uint64_t)RECORD_EXECUTE << RECORD_TYPE_SHIFT));
     Value *LaneID = IRB.CreateCall(LaneIDASM);
     Instruction::CastOps LaneIDCastOp = CastInst::getCastOpcode(LaneID, false, I64Type, false);
     LaneID = IRB.CreateCast(LaneIDCastOp, LaneID, I64Type);
@@ -471,7 +519,7 @@ struct InstrumentDevicePass : public ModulePass {
 
       if (isa<ReturnInst>(inst)) {
         Data = LaneID;
-        LDesc = IRB.CreateOr(Desc, ((uint64_t)ACCESS_RETURN << ACCESS_TYPE_SHIFT));
+        LDesc = IRB.CreateOr(Desc, ((uint64_t)RECORD_RETURN << RECORD_TYPE_SHIFT));
       } else {
         report_fatal_error("invalid access type encountered, this should not have happened");
       }
@@ -483,62 +531,49 @@ struct InstrumentDevicePass : public ModulePass {
 
   
   
-#define ESCAPE_DIR_CHAR '#'
-#define ESCAPE_DIR_TO_STR "_#"
-#define DIR_DUP_STR "//"
-#define DIR_DUP_TO_STR "/"
-#define DIR_CHAR '/'
-#define DIR_TO_STR "##"
-#define DEBUG_DATA "debuginfo.txt"
-#define DEBUG_TMP_DATA_PREFIX "debuginfo-"
+  GlobalVariable* setDebugData(Module &M, std::vector<char> input, const llvm::Twine &kernelName) {
 
-  std::string getModuleID(std::string ModuleID) {
+    LLVMContext &ctx = M.getContext();
 
-    // "#" to "_#"
-    size_t pos = (size_t)-2;
-    while ((pos = ModuleID.find(ESCAPE_DIR_CHAR, pos+2)) != std::string::npos)
-      ModuleID = ModuleID.replace(pos, 1, ESCAPE_DIR_TO_STR);
-
-    // "//" to "/"
-    pos = (size_t)0;
-    while ((pos = ModuleID.find(DIR_DUP_STR, pos)) != std::string::npos)
-      ModuleID = ModuleID.replace(pos, 2, DIR_DUP_TO_STR);
-
-    // "/" to "##"
-    pos = (size_t)-2;
-    while ((pos = ModuleID.find(DIR_CHAR, pos+2)) != std::string::npos)
-      ModuleID = ModuleID.replace(pos, 1, DIR_TO_STR);
+    const std::string varnameStr = getSymbolNameForKernel(kernelName, SYMBOL_DATA_VAR);
     
+    
+    GlobalVariable* debugData = M.getNamedGlobal(varnameStr.c_str());
+    if (debugData != nullptr) {
+      debugData->eraseFromParent();
+      debugData = nullptr;
+    }
+    
+    unsigned int data_len = input.size();
+    ArrayRef<char> dataArrRef = ArrayRef<char>(input.data(), data_len);
+    Constant* varInit = ConstantDataArray::get(ctx, dataArrRef);
+    debugData = new GlobalVariable(M, varInit->getType(), false,
+                                   GlobalValue::ExternalLinkage,
+                                   varInit, varnameStr.c_str(), nullptr,
+                                   GlobalValue::ThreadLocalMode::NotThreadLocal,
+                                   1, false);
+    debugData->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
+    debugData->setAlignment(1);
 
-    ModuleID = ModuleID.insert(0, DEBUG_TMP_DATA_PREFIX).append(".txt");
 
-    return ModuleID;
+    return debugData;
   }
-  
 
   
   bool runOnModule(Module &M) override {
-    //M.getContext().getOption<typename ValT, typename Base, ValT (Base::*Mem)>();
-    //printf("%d\n", TestInt++);
-    //pass_registry->getPassInfo(const void *TI);
-
-    LLVMContext &ctx = M.getContext();
     
-
-  
     bool isCUDA = M.getTargetTriple().find("nvptx") != std::string::npos;
     if (!isCUDA) return false;
 
 
-
-    const std::string ModuleIDRaw = std::string(M.getModuleIdentifier());
-    const std::string ModuleID = getModuleID(std::string(ModuleIDRaw));
-    std::string debug_info = "";
     bool debugWithoutProblem = true;
-    //printf("Module ID: %s\n", ModuleID.c_str());
-
-    
+    std::vector<char> debug_data;
     for (auto *kernel : getKernelFunctions(M)) {
+      DISubprogram * kernel_debuginfo = kernel->getSubprogram();
+      std::string kernel_name_orig;
+      if (kernel_debuginfo) {
+        kernel_name_orig = kernel_debuginfo->getName().str();
+      }
       
       auto accesses = collectGlobalMemAccesses(kernel);
       auto retinsts = collectReturnInst(kernel);
@@ -548,22 +583,23 @@ struct InstrumentDevicePass : public ModulePass {
       
       
       if (TraceMem) {
-        debugWithoutProblem &= setupAndGetDebugInfo(kernel, debug_info, accesses);
+        debugWithoutProblem &= setupAndGetKernelDebugData(kernel, debug_data, accesses);
         instrumentMemAccess(kernel, accesses, &info);
       }
 
       if (TraceThread) {
         instrumentScheduling(kernel, ipfront, retinsts, &info);
       }
+
       
+      setDebugData(M, debug_data, kernel->getName());
+      debug_data.clear();
     }
     
-    std::ofstream debug_info_fs(ModuleID);
-    debug_info_fs << debug_info;
-    debug_info_fs.close();
-    
     if (!debugWithoutProblem) {
-      std::cerr << "Debug info for \"" << ModuleIDRaw << "\" not found! Check if \"-g\" option is set.\n";
+      std::cerr << "cuprof: No memory access data for \""
+                << M.getModuleIdentifier()
+                << "\" found! Check if \"-g\" option is set.\n";
     }
 
     return true;
@@ -586,6 +622,52 @@ static RegisterPass<InstrumentDevicePass> X("memtrace-device", "includes static 
 
 
 
+
+  
+/*
+  std::string getModuleID(std::string ModuleID) {
+
+    // "#" to "_#"
+    size_t pos = (size_t)-2;
+    while ((pos = ModuleID.find('#', pos+2)) != std::string::npos)
+      ModuleID = ModuleID.replace(pos, 1, "_#");
+
+    // "//" to "/"
+    pos = (size_t)0;
+    while ((pos = ModuleID.find("//", pos)) != std::string::npos)
+      ModuleID = ModuleID.replace(pos, 2, "/");
+
+    // "/" to "##"
+    pos = (size_t)-2;
+    while ((pos = ModuleID.find('/', pos+2)) != std::string::npos)
+      ModuleID = ModuleID.replace(pos, 1, "##");
+    
+
+    ModuleID = ModuleID.insert(0, "debuginfo-").append(".txt");
+
+    return ModuleID;
+  }
+
+  void setFuncAsGlobalKernel(Module &M, Function *F) {
+    
+    LLVMContext &ctx = M.getContext();
+    NamedMDNode *nvvmAnnotation = M.getNamedMetadata("nvvm.annotations");
+
+    if (nvvmAnnotation) {
+
+      ArrayRef<Metadata*> arrRef({
+          ValueAsMetadata::get(F),
+          MDString::get(ctx, "kernel"),
+          ValueAsMetadata::get(ConstantInt::get(Type::getInt32Ty(ctx), 1))
+        });
+      
+      MDNode *mdnnew = MDNode::get(ctx, arrRef);      
+      nvvmAnnotation->addOperand(mdnnew);
+
+    }
+    
+  }
+*/
 
 
 
@@ -702,3 +784,253 @@ void setDebugDataExtern(Module &M) {
   
 }
 */
+
+
+/*
+
+
+#define APPEND_DINFO_FUNC_NAME "__append_debug_info"
+#define GLOBAL_CTOR_ARR_NAME "llvm.global_ctors"
+
+  GlobalVariable* appendStaticInitFunction(Module &M, const char* input) {
+
+    LLVMContext &ctx = M.getContext();
+    
+    std::string dataStr = "\t";
+    GlobalVariable* globalCtorVar = M.getNamedGlobal(GLOBAL_CTOR_ARR_NAME);
+    
+    SmallVector<Constant *, 8> Ctors;
+    Constant *init = nullptr;
+
+    //globalCtorVar->dump();
+
+    if (globalCtorVar != nullptr) {
+      if (auto initOld = dyn_cast<ConstantArray>(globalCtorVar->getInitializer())) {
+        unsigned int i = 0;
+        while (auto elem = initOld->getAggregateElement(i++)) {
+          Ctors.push_back(elem);
+        }
+      }
+    
+      globalCtorVar->eraseFromParent();
+      globalCtorVar = nullptr;
+    }
+    
+    
+    // Ctor function type is void()*.
+    Type *VoidTy = Type::getVoidTy(ctx);
+    Type *VoidPtrTy = Type::getInt32PtrTy(ctx);
+    Type *Int32Ty = Type::getInt32Ty(ctx);
+    Type *Int8PtrTy = Type::getInt8PtrTy(ctx);
+    FunctionType* CtorFTy = FunctionType::get(VoidTy, false);
+    Type *CtorPFTy = PointerType::getUnqual(CtorFTy);
+
+    // Get the type of a ctor entry, { i32, void ()*, i8* }.
+    StructType *CtorStructTy = StructType::get(
+      (Type*) Int32Ty, (Type*) PointerType::getUnqual(CtorFTy), (Type*) Int8PtrTy);
+
+
+    Function* F = Function::Create(CtorFTy, Function::ExternalLinkage, APPEND_DINFO_FUNC_NAME, M);
+    
+    Constant *S[] = {
+      ConstantInt::get(Int32Ty, 65535, false),
+      ConstantExpr::getBitCast(F, CtorPFTy),
+      Constant::getNullValue(Int8PtrTy)
+    };
+    
+    Ctors.push_back(ConstantStruct::get(CtorStructTy, S));
+    
+    
+    ArrayRef<Constant *> CtorArrRef(Ctors.begin(), Ctors.end());
+    ArrayType *AT = ArrayType::get(CtorStructTy, Ctors.size());
+    
+    globalCtorVar = new GlobalVariable(M, AT, false,
+                                       GlobalValue::AppendingLinkage,
+                                       ConstantArray::get(AT, Ctors),
+                                       GLOBAL_CTOR_ARR_NAME);
+    
+    
+    
+    if (globalCtorVar != nullptr)
+      globalCtorVar->dump();
+    
+    return globalCtorVar;
+  }
+
+  
+*/
+
+
+
+
+  
+/*
+  if (!dataStr.empty() && dataStr.back() == 0)
+  dataStr.back() = '\t';
+  dataStr.append(input);
+  dataStr.push_back(0);
+  const int txtlen = dataStr.size();
+  Type *i8 = Type::getInt8Ty(M.getContext());
+  ArrayType* arty = ArrayType::get(i8, txtlen);
+
+    
+  ArrayRef<char> dataArrRef = ArrayRef<char>(dataStr.c_str(), txtlen);
+  Constant* initNew = ConstantDataArray::get(M.getContext(), dataArrRef);
+    
+  debugData = new GlobalVariable(M, //Module
+  initNew->getType(), //Type
+  true, //isConstant
+  GlobalValue::AppendingLinkage, //Linkage
+  initNew, //Initializer
+  TRACE_DEBUG_DATA,  //Name
+  nullptr,
+  llvm::GlobalValue::ThreadLocalMode::NotThreadLocal,
+  1,
+  false);
+  debugData->setSection(".ctor");
+
+  debugData->setAlignment(1);
+
+*/
+
+
+  /*
+
+
+    Constant * FC = M.getOrInsertFunction(funcname, Type::getVoidTy(ctx), NULL);
+    Function * func = dyn_cast<Function>(FC);
+    Type *debugDataTy = getDebugDataType(ctx);
+    
+    if (func) {
+      func->setCallingConv(CallingConv::C);
+      BasicBlock* block = BasicBlock::Create(ctx, "entry", func);
+
+      IRBuilder<> IRB(block);
+
+
+      
+      GlobalVariable* debugDataGv = defineDeviceGlobal(M, debugDataTy, "___DEBUG_DATA_PTR");
+      assert(debugDataGv != nullptr);
+    
+
+      Value *debugDataLenGvPtr = IRB.CreateStructGEP(nullptr, debugDataGv, 0);
+      Value *debugDataLenGv = IRB.CreateLoad(debugDataLenGvPtr, "debugdatalen");
+      
+      Value *debugDataVarGvPtr = IRB.CreateStructGEP(nullptr, debugDataGv, 1);
+      Value *debugDataVarGv = IRB.CreateLoad(debugDataVarGvPtr, "debugdata");
+
+      
+      Value *debugDataL = IRB.CreateLoad(debugData, "debugdata22");
+
+      //GlobalVariable *debugDataTarget = M.getNamedGlobal("___DEBUG_DATA_PTR");
+
+      //debugDataGv->dump();
+      //debugData->dump();
+      //ArrayRef<unsigned int> idxArr({0});
+      //IRB.CreateInsertValue(debugDataGv, ConstantInt::get(IntegerType::get(ctx, 64), 0), idxArr);
+      //IRB.CreateStore(debugDataVarGv, debugDataVarGvPtr);
+      //printf("\n\n\ndebugDataVarGvPtr\n\n");
+      //debugDataVarGvPtr->dump();
+      //printf("\n\n\ndebugDataVarGv\n\n");
+      //debugDataVarGv->dump();
+      //printf("\n\n\ndebugDataL\n\n");
+      //debugDataL->dump();
+      //varInit->dump();
+      //IRB.CreateLoad(debugDataGv);
+      //Value *valstruct = IRB.CreateAlloca(debugDataTy, 1);
+      //Value *valstructptr1 = IRB.CreateStructGEP(nullptr, debugDataGv, 0);
+      //Value *debugDataLenGv = IRB.CreateLoad(debugDataLenGvPtr, "debugdatalen");
+      
+      //Value *valstructptr2 = IRB.CreateStructGEP(nullptr, debugDataGv, 1);
+      //Value *debugDataVarGv = IRB.CreateLoad(debugDataVarGvPtr, "debugdata");
+      //IRB.CreateStore(debugData, valstructptr1);
+
+      
+      //IRB.CreateStore(valcast, debugDataLenGvPtr);
+      //IRB.CreateStore(debugData, debugDataGv);
+      //GlobalVariable *debugDataTarget = M.getNamedGlobal("___DEBUG_DATA_PTR");
+
+
+      //GlobalVariable* testGv = defineDeviceGlobal(M, ArrayType::get(Type::getInt8Ty(ctx), 1024), "___testestasetasdf");
+      //Constant *testinit = testGv->getInitializer();
+      //ArrayRef<unsigned int> idxArr({0});
+      //Value *Res = UndefValue::get(ArrayType::get(Type::getInt8Ty(ctx), 1024));
+      IRB.CreateStore(ConstantInt::get(Type::getInt32Ty(ctx), 1302), debugDataLenGvPtr);
+      //IRB.CreateInsertValue(debugDataGv, ConstantInt::get(Type::getInt32Ty(ctx), 1302), 0);
+      Value* result = IRB.CreateInsertValue(debugDataVarGv, ConstantInt::get(Type::getInt8Ty(ctx), '#'), 3);
+      IRB.CreateStore(result, debugDataVarGvPtr);
+
+
+
+      //intrinst->setDest(debugDataVarGvPtr);
+      //intrinst->setLength(ConstantInt::get(Type::getInt32Ty(ctx), 1024));
+      //intrinst->
+      
+
+      //debugData->dump();
+      //testGv->dump();
+      //Value *test = IRB.CreateBitCast(debugData, testGv->
+      //IRB.CreateStore(debugData, testGv);
+
+      
+      
+      //CastInst *debugDataCastInst = AddrSpaceCastInst(debugDataTarget, Int8PtrTy
+      //Value *debugDataPtr = IRB.CreateBitCast(debugDataTarget, Int8PtrTy);
+      //IRB.CreateStore(debugData, debugDataPtr);
+      IRB.CreateRetVoid();
+    }
+  */
+
+
+    
+    /*
+    // Construct the constructor and destructor arrays.
+    for (const auto &I : Fns) {
+      Constant *S[] = {
+        ConstantInt::get(Int32Ty, I.Priority, false),
+        ConstantExpr::getBitCast(I.Initializer, CtorPFTy),
+        (I.AssociatedData
+        ? ConstantExpr::getBitCast(I.AssociatedData, VoidPtrTy)
+        : Constant::getNullValue(VoidPtrTy))};
+        Ctors.push_back(ConstantStruct::get(CtorStructTy, S));
+        }
+    */
+    
+
+    //debugData->setDSOLocal(true);
+    //debugData->setVisibility(llvm::GlobalValue::VisibilityTypes::DefaultVisibility);
+    //debugData->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+
+
+    
+    /*
+    // Ctor function type is void()*.
+    FunctionType* CtorFTy = FunctionType::get(VoidTy, false);
+    Type *CtorPFTy = PointerType::getUnqual(CtorFTy);
+
+    // Get the type of a ctor entry, { i32, void ()*, i8* }.
+    StructType *CtorStructTy = StructType::get(
+      Int32Ty, PointerType::getUnqual(CtorFTy), VoidPtrTy, nullptr);
+
+    // Construct the constructor and destructor arrays.
+    SmallVector<Constant *, 8> Ctors;
+    for (const auto &I : Fns) {
+      Constant *S[] = {
+        ConstantInt::get(Int32Ty, I.Priority, false),
+        ConstantExpr::getBitCast(I.Initializer, CtorPFTy),
+        (I.AssociatedData
+         ? ConstantExpr::getBitCast(I.AssociatedData, VoidPtrTy)
+         : Constant::getNullValue(VoidPtrTy))};
+      Ctors.push_back(ConstantStruct::get(CtorStructTy, S));
+    }
+
+    if (!Ctors.empty()) {
+      ArrayType *AT = ArrayType::get(CtorStructTy, Ctors.size());
+      new GlobalVariable(TheModule, AT, false,
+                         GlobalValue::AppendingLinkage,
+                         ConstantArray::get(AT, Ctors),
+                         GlobalName);
+    }
+    */
+
+

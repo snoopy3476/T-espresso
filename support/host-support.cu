@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <libgen.h>
 
+
 #define always_assert(cond) do {                                        \
     if (!(cond)) {                                                      \
       printf("assertion failed at %s:%d: %s\n", __FILE__, __LINE__, #cond); \
@@ -27,6 +28,10 @@
     }                                                           \
   } while(0)
 
+extern "C" {
+  static char * ___cuprof_accdat_var = NULL;
+  static uint64_t ___cuprof_accdat_varlen = 0;
+}
 
 static const char* getexename() {
   static char* cmdline = NULL;
@@ -114,6 +119,8 @@ typedef struct kernel_trace_arg_t {
 
 class TraceConsumer {
 public:
+  static char * debugdata;
+  
   //TraceConsumer(std::string suffix, const char* header_info) {
   TraceConsumer(std::string suffix) {
 
@@ -145,8 +152,7 @@ public:
       abort();
     }
 
-    //trace_write_header(output, ___CUDATRACE_DEBUG_DATA);
-    trace_write_header(output);
+    trace_write_header(output, ___cuprof_accdat_var, ___cuprof_accdat_varlen);
   }
 
   virtual ~TraceConsumer() {
@@ -415,6 +421,7 @@ public:
 private:
   std::vector<std::pair<cudaStream_t, TraceConsumer*>> consumers;
 };
+char * TraceConsumer::debugdata = nullptr;
 
 TraceManager __trace_manager;
 
@@ -423,6 +430,38 @@ TraceManager __trace_manager;
  */
 
 extern "C" {
+  
+  //static char * ___cuprof_accdat_var = NULL;
+  //static uint64_t ___cuprof_accdat_varlen = 0;
+  
+  void ___cuprof_accdat_ctor() {
+    if (!___cuprof_accdat_var) {
+      ___cuprof_accdat_var = (char *) malloc(sizeof(char));
+    }
+  }
+  
+  void ___cuprof_accdat_dtor() {
+    if (___cuprof_accdat_var) {
+      free(___cuprof_accdat_var);
+      ___cuprof_accdat_var = NULL;
+    }
+  }
+
+  void ___cuprof_accdat_append(const char * data, uint64_t data_len) {
+    char * var_tmp = (char *) realloc(___cuprof_accdat_var,
+                                      ___cuprof_accdat_varlen + data_len + 1);
+    if (!var_tmp) {
+      fprintf(stderr, "cuprof: Failed to initialize memory access data!\n");
+      abort();
+    }
+
+    memcpy(var_tmp + ___cuprof_accdat_varlen, data, data_len);
+    var_tmp[___cuprof_accdat_varlen + data_len] = '\0';
+    
+    ___cuprof_accdat_var = var_tmp;
+    ___cuprof_accdat_varlen += data_len;
+  }
+
   
   void __trace_fill_info(const void *info, cudaStream_t stream) {
     auto *consumer = __trace_manager.getConsumer(stream);
@@ -449,7 +488,6 @@ extern "C" {
       abort();
     }
     *arg = (kernel_trace_arg_t){kernel_name, block_size};
-    
     cudaChecked(cudaStreamAddCallback(stream,
                                       __trace_start_callback, (void*)arg, 0));
   }
