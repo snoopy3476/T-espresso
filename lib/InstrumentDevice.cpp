@@ -594,17 +594,17 @@ struct InstrumentDevicePass : public ModulePass {
       IRBuilderBase::InsertPoint ipfront = setupTraceInfo(kernel, &info);
       
       
+      debug_without_problem &= setupAndGetKernelDebugData(kernel, debug_data, accesses);
       if (args.trace_mem) {
-        debug_without_problem &= setupAndGetKernelDebugData(kernel, debug_data, accesses);
         instrumentMemAccess(kernel, accesses, &info);
       }
+      setDebugData(M, debug_data, kernel_name_sym); //////////////////////
 
       if (args.trace_thread) {
         instrumentScheduling(kernel, ipfront, retinsts, &info);
       }
 
       
-      setDebugData(M, debug_data, kernel_name_sym);
       debug_data.clear();
     }
     

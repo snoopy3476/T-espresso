@@ -64,7 +64,7 @@ typedef struct {
         (((uint64_t)smid & 0xFFFF) << 32) | ((uint64_t)warp & 0xFFFFFFFF), \
         (((uint64_t)cta_x) << 32) | (((uint64_t)cta_y & 0xFFFF) << 16) | ((uint64_t)cta_z & 0xFFFF), \
         ((uint64_t)clock), \
-        (((uint64_t)size) << 32) | ((uint64_t)instid) & 0xFFFFFFFF,  \
+        (((uint64_t)size) << 32) | (((uint64_t)instid) & 0xFFFFFFFF),   \
         } \
   })
 

@@ -130,6 +130,8 @@ namespace clang {
             }
             pass_args.cta.push_back(ctaid);
           }
+        } else {
+          fprintf(stderr, "cuprof: unused argument: %s\n", optstr.c_str());
         }
 
         

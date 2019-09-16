@@ -27,8 +27,8 @@ extern "C" {
  *   2 Byte: CTA Id Z
  */
 
-  static const char cuprof_header_prefix[] = "#CUPROFTRACE#";
-  static const char cuprof_header_postfix[] = "\0\0\0\0";
+  static const char TRACE_HEADER_PREFIX[] = "__CUPROF_TRACE__";
+  static const char TRACE_HEADER_POSTFIX[] = "\0\0\0\0";
 
   
   
@@ -101,7 +101,7 @@ extern "C" {
 
   size_t serialize_int(char * buf, size_t byte, uint32_t input) {
     for (size_t i = 0; i < byte; i++) {
-      buf[i] = ( (uint8_t)input >> (i * 8) ) & 0xFF;
+      buf[i] = (uint8_t) (input >> (i * 8)) & 0xFF;
     }
     
     return byte;
@@ -206,10 +206,10 @@ extern "C" {
 
   
   trace_t *trace_open(FILE *f) {
-    char delim_buf[CONST_MAX(sizeof(cuprof_header_prefix), sizeof(cuprof_header_postfix) + 5)];
+    char delim_buf[CONST_MAX(sizeof(TRACE_HEADER_PREFIX), sizeof(TRACE_HEADER_POSTFIX) + 5)];
 
-    if (fread(delim_buf, sizeof(cuprof_header_prefix), 1, f) < 1 &&
-        memcmp(delim_buf, cuprof_header_prefix, sizeof(cuprof_header_prefix)) != 0) {
+    if (fread(delim_buf, sizeof(TRACE_HEADER_PREFIX), 1, f) < 1 &&
+        memcmp(delim_buf, TRACE_HEADER_PREFIX, sizeof(TRACE_HEADER_PREFIX)) != 0) {
       trace_last_error = "failed to read trace header";
       return NULL;
     }
@@ -222,7 +222,7 @@ extern "C" {
     // build memory access data for each kernels
     uint64_t kernel_count;
     for (kernel_count = 0;
-         fread(delim_buf, 4, 1, f) == 1 && memcmp(delim_buf, cuprof_header_postfix, 4) != 0;
+         fread(delim_buf, 4, 1, f) == 1 && memcmp(delim_buf, TRACE_HEADER_POSTFIX, 4) != 0;
          kernel_count++) {
 
       // increase kernel_accdat alloc size if not enough
@@ -422,7 +422,7 @@ extern "C" {
 
   int trace_write_header(FILE *f, const char * accdat, uint64_t accdat_len) {
   
-    if (fwrite(cuprof_header_prefix, sizeof(cuprof_header_prefix), 1, f) < 1) {
+    if (fwrite(TRACE_HEADER_PREFIX, sizeof(TRACE_HEADER_PREFIX), 1, f) < 1) {
       trace_last_error = "header write error";
       return 1;
     }
@@ -432,7 +432,7 @@ extern "C" {
       return 1;
     }
 
-    if (fwrite(cuprof_header_postfix, sizeof(char), 4, f) < 4) {
+    if (fwrite(TRACE_HEADER_POSTFIX, sizeof(char), 4, f) < 4) {
       trace_last_error = "header write error";
       return 1;
     }
