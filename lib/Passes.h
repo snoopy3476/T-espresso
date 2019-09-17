@@ -7,8 +7,9 @@ namespace llvm {
   typedef struct InstrumentPassArg {
     bool trace_thread, trace_mem;
     std::vector<std::string> kernel;
-    std::vector<uint32_t> sm, warp;
-    std::vector<std::array<uint32_t, 3>> cta;
+    std::vector<uint8_t> sm;
+    std::vector<uint64_t> cta;
+    std::vector<uint32_t> warp;
   } InstrumentPassArg;
 
   static InstrumentPassArg args_default = {

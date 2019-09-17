@@ -117,6 +117,19 @@ struct InstrumentHostPass : public ModulePass {
    * void __trace_stop(cudaStream_t stream);
    */
 
+  void initTypes(Module &M) {
+    LLVMContext &ctx = M.getContext();
+    
+    Type *Int8Ty = Type::getInt8Ty(ctx);
+    Type *Int32Ty = Type::getInt32Ty(ctx);
+    Type *Int64Ty = Type::getInt64Ty(ctx);
+    
+    traceInfoTy = getTraceInfoType(M.getContext());
+    SizeTy = Type::getIntNTy(ctx, sizeof(size_t) * 8);
+    SizePtrTy = Type::getIntNPtrTy(ctx, sizeof(size_t) * 8);
+    CudaMemcpyKindTy = Type::getIntNTy(ctx, sizeof(cudaMemcpyKind) * 8);
+    CudaErrorTy = Type::getIntNTy(ctx, sizeof(cudaError_t) * 8);
+  }
   
 
   GlobalVariable* getOrCreateGlobalVar(Module &M, Type* T, const Twine &name) {
@@ -135,16 +148,38 @@ struct InstrumentHostPass : public ModulePass {
     assert(Global != nullptr);
     return Global;
   }
+
+  template <typename T>
+  GlobalVariable* getOrInsertGlobalArray(Module &M, std::vector<T> input, const char* name) {
+    LLVMContext& ctx = M.getContext();
+
+    GlobalVariable* gv = M.getNamedGlobal(name);
+    
+    if (!gv) {
+      ArrayRef<T> dref = ArrayRef<T>(input.data(), input.size());
+      Constant* init = ConstantDataArray::get(ctx, dref);
+      gv = new GlobalVariable(M, init->getType(), true,
+                              GlobalValue::InternalLinkage,
+                              init, name);
+    }
+
+    return gv;
+  }
   
   void findOrInsertRuntimeFunctions(Module &M) {
     LLVMContext &ctx = M.getContext();
     Type* i8PtrTy = Type::getInt8PtrTy(ctx);
-    Type* voidPtrTy = Type::getInt8PtrTy(ctx);
-    Type* stringTy = Type::getInt8PtrTy(ctx);
+    Type* i32PtrTy = Type::getInt32PtrTy(ctx);
+    Type* i64PtrTy = Type::getInt64PtrTy(ctx);
+    Type* voidPtrTy = i8PtrTy;
+    Type* stringTy = i8PtrTy;
+    
+    Type* i8Ty = Type::getInt8Ty(ctx);
     Type* i16Ty = Type::getInt16Ty(ctx);
     Type* i32Ty = Type::getInt32Ty(ctx);
     Type* i64Ty = Type::getInt64Ty(ctx);
     Type* voidTy = Type::getVoidTy(ctx);
+
 
     
     AccdatCtor = M.getOrInsertFunction("___cuprof_accdat_ctor",
@@ -160,7 +195,7 @@ struct InstrumentHostPass : public ModulePass {
     TraceCopyToSymbol = M.getOrInsertFunction("__trace_copy_to_symbol",
                                               voidTy, i8PtrTy, voidPtrTy, voidPtrTy);
     TraceTouch = M.getOrInsertFunction("__trace_touch",
-                                       voidTy, i8PtrTy);
+                                       voidTy, i8PtrTy, i8PtrTy, i64PtrTy, i32PtrTy, SizePtrTy);
     TraceStart = M.getOrInsertFunction("__trace_start",
                                        voidTy, i8PtrTy, stringTy, i16Ty);
     TraceStop = M.getOrInsertFunction("__trace_stop",
@@ -186,7 +221,6 @@ struct InstrumentHostPass : public ModulePass {
     // 2. get trace consumer info
     // 3. copy trace consumer info to device
 
-      
 
     IRBuilder<> IRB(configureCall->getNextNode());
 
@@ -194,12 +228,15 @@ struct InstrumentHostPass : public ModulePass {
     Type* i16Ty = IRB.getInt16Ty();
     Type* i32Ty = IRB.getInt32Ty();
     Type* i64Ty = IRB.getInt64Ty();
-    Type* i8PtrTy = IRB.getInt8PtrTy();
+    Type* i8PtrTy = IRB.getInt8Ty()->getPointerTo();
+    Type* i16PtrTy = IRB.getInt16Ty()->getPointerTo();
+    Type* i32PtrTy = IRB.getInt32Ty()->getPointerTo();
+    Type* i64PtrTy = IRB.getInt64Ty()->getPointerTo();
 
     Value* kernelNameVal = IRB.CreateGlobalStringPtr(kernelName);
 
     // try adding in global symbol + cuda registration
-    Module &M = *configureCall->getParent()->getParent()->getParent();
+    Module &M = *configureCall->getModule();
 
     Type* GlobalVarType = traceInfoTy;
     std::string kernelSymbolName = getSymbolNameForKernel(kernelName);
@@ -229,8 +266,28 @@ struct InstrumentHostPass : public ModulePass {
       IRB.CreateCast(castOp_i64_i16, blockSize, i16Ty),
       IRB.CreateCast(castOp_i32_i16, blockSize_z, i16Ty)
       ); // <uint16_t>(x*y) * <uint16_t>z
-      
-    IRB.CreateCall(TraceTouch, {streamPtr});
+
+    
+
+    // set trace filter info
+    
+    GlobalVariable* sm_gv = getOrInsertGlobalArray<uint8_t>(M, args.sm, "___cuprof_sm_filter");
+    Constant* sm = ConstantExpr::getPointerCast(sm_gv, i8PtrTy);
+    
+    GlobalVariable* cta_gv = getOrInsertGlobalArray<uint64_t>(M, args.cta, "___cuprof_cta_filter");
+    Constant* cta = ConstantExpr::getPointerCast(cta_gv, i64PtrTy);
+    
+    GlobalVariable* warp_gv = getOrInsertGlobalArray<uint32_t>(M, args.warp, "___cuprof_warp_filter");
+    Constant* warp = ConstantExpr::getPointerCast(warp_gv, i32PtrTy);
+
+    
+
+    std::vector<size_t> filter_size_vec = {args.sm.size(), args.cta.size(), args.warp.size()};
+    GlobalVariable* filter_size_gv = getOrInsertGlobalArray<size_t>(M, filter_size_vec, "___cuprof_filter_size");
+    Constant* filter_size = ConstantExpr::getPointerCast(filter_size_gv, SizePtrTy);
+    
+    
+    IRB.CreateCall(TraceTouch, {streamPtr, sm, cta, warp, filter_size});
     IRB.CreateCall(TraceStart, {streamPtr, kernelNameVal, blockSize});
 
     const DataLayout &DL = configureCall->getParent()->getParent()->getParent()->getDataLayout();
@@ -505,11 +562,7 @@ struct InstrumentHostPass : public ModulePass {
 
       
     // type init
-    traceInfoTy = getTraceInfoType(M.getContext());
-    SizeTy = Type::getIntNTy(ctx, sizeof(size_t) * 8);
-    SizePtrTy = Type::getIntNPtrTy(ctx, sizeof(size_t) * 8);
-    CudaMemcpyKindTy = Type::getIntNTy(ctx, sizeof(cudaMemcpyKind) * 8);
-    CudaErrorTy = Type::getIntNTy(ctx, sizeof(cudaError_t) * 8);
+    initTypes(M);
 
 
     //setFuncbaseAttr(M);
@@ -525,7 +578,7 @@ struct InstrumentHostPass : public ModulePass {
 
     // patch calls && collect kernels called
     for (auto &kcall : getAnalysis<LocateKCallsPass>().getLaunches()) {
-      std::string kernel_name_sym = StringRef(kcall.kernelName).str();
+      std::string kernel_name_sym = kcall.kernelName;
 
       
       // kernel filtering

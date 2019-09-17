@@ -115,6 +115,13 @@ typedef struct kernel_trace_arg_t {
   uint16_t kernel_block_size;
 } kernel_trace_arg_t;
 
+typedef struct trace_filter_arg_t {
+  const uint8_t* sm;
+  const uint64_t* cta;
+  const uint32_t* warp;
+  const size_t* size;
+} trace_filter_arg_t;
+
 //extern const char ___CUDATRACE_DEBUG_DATA[];
 
 class TraceConsumer {
@@ -122,13 +129,14 @@ public:
   static char * debugdata;
   
   //TraceConsumer(std::string suffix, const char* header_info) {
-  TraceConsumer(std::string suffix) {
+  TraceConsumer(std::string suffix, trace_filter_arg_t trace_filter) {
 
     //printf("___CUDATRACE_DEBUG_DATA"); //
     //printf(" (%p) = ", ___CUDATRACE_DEBUG_DATA); //
     //printf("%s\n", ___CUDATRACE_DEBUG_DATA); //
     
     this->suffix = suffix;
+    TraceConsumer::trace_filter = trace_filter;
 
     cudaChecked(cudaHostAlloc(&RecordsHost, SLOTS_NUM * SLOTS_SIZE * RECORD_SIZE, cudaHostAllocMapped));
     cudaChecked(cudaHostGetDevicePointer(&RecordsDevice, RecordsHost, 0));
@@ -233,14 +241,54 @@ protected:
     for (int32_t i = 0; i < numRecords; ++i) {
 
       __trace_unpack((record_t *)&recordsPtr[i * RECORD_SIZE], newrec);
-/*
-      if (limit_count++ < 10) printf(
-        "\tNEWREC type: %u, size: %u, smid: %u, "
-        "ctaid: (%u, %u, %u), warp: %u, clock: %u, addr: %lx, alen: %u\n",
-        newrec->type, newrec->size,
-        newrec->smid, newrec->ctaid.x, newrec->ctaid.y, newrec->ctaid.z,
-        newrec->warp, newrec->clock, newrec->addr_unit->addr, newrec->addr_len);
-*/
+
+
+      // filter
+      
+      bool to_be_traced = true;
+      
+      if (trace_filter.size[0] > 0) {
+        
+        bool is_found = false;
+        for (int i = 0; i < trace_filter.size[0]; i++)
+          if (trace_filter.sm[i] == newrec->smid)
+            is_found = true;
+        
+        if (!is_found)
+          to_be_traced = false;
+      }
+      
+      if (trace_filter.size[1] > 0) {
+        
+        bool is_found = false;
+        for (int i = 0; i < trace_filter.size[1]; i++)
+          if ( trace_filter.cta[i] ==
+              ((((uint64_t)newrec->ctaid.x) << 32) |
+              (((uint64_t)newrec->ctaid.y & 0xFFFF) << 16) |
+               ((uint64_t)newrec->ctaid.z & 0xFFFF)) )
+            is_found = true;
+        
+        if (!is_found)
+          to_be_traced = false;
+      }
+      
+      if (trace_filter.size[2] > 0) {
+        
+        bool is_found = false;
+        for (int i = 0; i < trace_filter.size[2]; i++)
+          if (trace_filter.warp[i] == newrec->warp)
+            is_found = true;
+        
+        if (!is_found)
+          to_be_traced = false;
+      }
+
+
+      if (!to_be_traced)
+        continue;
+      
+
+      
       // if this is the first record, intialize it
       if (acc->addr_unit->count == 0) {
 	memcpy(acc, newrec, sizeof(trace_record_t));
@@ -359,6 +407,7 @@ protected:
   }
 
   std::string suffix;
+  static trace_filter_arg_t trace_filter;
 
   std::atomic<bool> shouldRun;
   std::atomic<bool> doesRun;
@@ -372,6 +421,7 @@ protected:
   uint8_t *CommitsHost, *CommitsDevice;
   uint8_t *RecordsHost, *RecordsDevice;
 };
+trace_filter_arg_t TraceConsumer::trace_filter;
 
 /*******************************************************************************
  * TraceManager acts as a cache for TraceConsumers and ensures only one consumer
@@ -385,7 +435,7 @@ public:
    * consumer had to be created, false otherwise.
    */
   //bool touchConsumer(cudaStream_t stream, const char* header_info) {
-  bool touchConsumer(cudaStream_t stream) {
+  bool touchConsumer(cudaStream_t stream, trace_filter_arg_t trace_filter) {
     for (auto &consumerPair : consumers) {
       if (consumerPair.first == stream) {
         return false;
@@ -394,7 +444,7 @@ public:
 
     char *suffix;
     asprintf(&suffix, "%d", (int)consumers.size());
-    auto newPair = std::make_pair(stream, new TraceConsumer(suffix));
+    auto newPair = std::make_pair(stream, new TraceConsumer(suffix, trace_filter));
     free(suffix);
     consumers.push_back(newPair);
     return true;
@@ -430,9 +480,6 @@ TraceManager __trace_manager;
  */
 
 extern "C" {
-  
-  //static char * ___cuprof_accdat_var = NULL;
-  //static uint64_t ___cuprof_accdat_varlen = 0;
   
   void ___cuprof_accdat_ctor() {
     if (!___cuprof_accdat_var) {
@@ -477,8 +524,27 @@ extern "C" {
   static void __trace_stop_callback(cudaStream_t stream, cudaError_t status, void *vargs);
 
   //void __trace_touch(cudaStream_t stream, const char *header_info) {
-  void __trace_touch(cudaStream_t stream) {
-    __trace_manager.touchConsumer(stream);
+  void __trace_touch(cudaStream_t stream, uint8_t* sm_filter, uint64_t* cta_filter,
+                     uint32_t* warp_filter, size_t* filter_size) {
+/*
+    printf("%p, %p, %p, %p\n", sm_filter, cta_filter, warp_filter, filter_size);
+    
+    for (int i = 0; i < filter_size[0]; i++) {
+      printf("%u/", sm_filter[i]);
+    }
+    putchar('\n');
+    
+    for (int i = 0; i < filter_size[1]; i++) {
+      printf("%lu/", cta_filter[i]);
+    }
+    putchar('\n');
+    
+    for (int i = 0; i < filter_size[2]; i++) {
+      printf("%u/", warp_filter[i]);
+    }
+    putchar('\n');
+*/
+    __trace_manager.touchConsumer(stream, (trace_filter_arg_t){sm_filter, cta_filter, warp_filter, filter_size});
   }
 
   void __trace_start(cudaStream_t stream, const char *kernel_name, uint16_t block_size) {

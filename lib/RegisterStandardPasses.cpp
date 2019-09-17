@@ -98,12 +98,34 @@ namespace clang {
           while (getline(optarglist, optarg, ' ')) {
             
             if (std::all_of(optarg.begin(), optarg.end(), ::isdigit)) {
-              uint32_t smid = std::stoi(optarg);
+              uint8_t smid = (uint8_t)(std::stoi(optarg) & 0xFF);
               pass_args.sm.push_back(smid);
             }
           }
 
           
+        } else if (optname == "cta") {
+          std::string optarg;
+          while (getline(optarglist, optarg, ' ')) {
+            
+            uint32_t ctaid[3] = {0, 0, 0};
+            std::stringstream ctaidlist(optarg);
+            std::string ctaid_cur;
+            
+            for (int i = 0; i < 3 && getline(ctaidlist, ctaid_cur, '/'); i++) {
+              if (std::all_of(ctaid_cur.begin(), ctaid_cur.end(), ::isdigit)) {
+                ctaid[i] = stoi(ctaid_cur);
+              }
+            }
+
+            uint64_t ctaid_conv =
+              ( (uint64_t)ctaid[0] << 32 ) +
+              ( (uint64_t)(ctaid[1] & 0xFFFF) << 16 ) +
+              ( (uint64_t)ctaid[2] & 0xFFFF );
+            pass_args.cta.push_back(ctaid_conv);
+          }
+          
+
         } else if (optname == "warp") {
           std::string optarg;
           while (getline(optarglist, optarg, ' ')) {
@@ -114,22 +136,9 @@ namespace clang {
             }
           }
           
+
+
           
-        } else if (optname == "cta") {
-          std::string optarg;
-          while (getline(optarglist, optarg, ' ')) {
-            
-            std::array<uint32_t, 3> ctaid({0, 0, 0});
-            std::stringstream ctaidlist(optarg);
-            std::string ctaid_cur;
-            
-            for (int i = 0; i < 3 && getline(ctaidlist, ctaid_cur, '/'); i++) {
-              if (std::all_of(ctaid_cur.begin(), ctaid_cur.end(), ::isdigit)) {
-                ctaid[i] = stoi(ctaid_cur);
-              }
-            }
-            pass_args.cta.push_back(ctaid);
-          }
         } else {
           fprintf(stderr, "cuprof: unused argument: %s\n", optstr.c_str());
         }
@@ -137,24 +146,6 @@ namespace clang {
         
       }
 
-      
-/*
-      printf("%c, %c, ",
-             pass_args.trace_thread ? 'T' : 'F', pass_args.trace_mem ? 'T' : 'F');
-      printf("{ ");
-      for (size_t i = 0; i < pass_args.kernel.size(); i++)
-        printf("%s ", pass_args.kernel[i].c_str());
-      printf("}, { ");
-      for (size_t i = 0; i < pass_args.sm.size(); i++)
-        printf("%u ", pass_args.sm[i]);
-      printf("}, { ");
-      for (size_t i = 0; i < pass_args.warp.size(); i++)
-        printf("%u ", pass_args.warp[i]);
-      printf("}, { ");
-      for (size_t i = 0; i < pass_args.cta.size(); i++)
-        printf("%u/%u/%u ", pass_args.cta[i][0], pass_args.cta[i][1], pass_args.cta[i][2]);
-      printf("}\n");
-*/
 
       return true;
     }

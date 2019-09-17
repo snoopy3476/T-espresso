@@ -2,29 +2,10 @@
 
 
 extern "C" {
-
-  /*
-  __device__ volatile char ___cuprof_accdat_var[1024] = {0};
-  __device__ volatile uint32_t ___cuprof_accdat_varlen = 1;
-
-
-  __global__ void ___cuprof_accdat_funcbase() {
-    return;
-  }
-
-  
-  __device__ void ___cuprof_set_accdat(const char * data, const uint64_t data_size) {
-    for (uint64_t i = 0; i < data_size; i++) ___cuprof_accdat_var[i] = data[i];
-    ___cuprof_accdat_varlen = data_size;
-  }
-  */
   
   __device__ void ___cuprof_trace(uint8_t* records, uint8_t* allocs, uint8_t* commits,
                                   uint64_t desc, uint64_t addr, uint64_t clock,
                                   uint32_t slot, uint32_t inst_id) {
-    //uint32_t clock_val;
-    //asm volatile ("mov.u32 %0, %%clock;" : "=r"(clock_val));
-
 
 	
     uint64_t cta = blockIdx.x;
@@ -46,6 +27,11 @@ extern "C" {
     volatile uint32_t *valloc = alloc;
     volatile uint32_t *vcommit = commit;
     unsigned int id = 0;
+    
+    uint32_t slot_offset = slot * SLOTS_SIZE;
+    uint32_t warp_id = (threadIdx.x +
+                        threadIdx.y * blockDim.x +
+                        threadIdx.z * blockDim.x * blockDim.y) / 32;
 
     if (lane_id == lowest) {
       while(*valloc > (SLOTS_SIZE - 32) || (id = atomicAdd(alloc, n_active)) > (SLOTS_SIZE - 32)) {
@@ -53,39 +39,15 @@ extern "C" {
       }
     }
 
-    uint32_t slot_offset = slot * SLOTS_SIZE;
     uint32_t record_offset = __shfl_sync(0xFFFFFFFF, id, lowest) + rlane_id;
     record_t *record = (record_t*) &(records[(slot_offset + record_offset) * RECORD_SIZE]);
-    uint32_t warp_id = (threadIdx.x +
-                        threadIdx.y * blockDim.x +
-                        threadIdx.z * blockDim.x * blockDim.y) / 32;
-    //asm volatile ("mov.u32 %0, %%warpid;" : "=r"(warp_id));
-    //if (addr == 0)
-//	record->desc = 0;
-    //  else
+    
     *record = RECORD_SET_INIT(1, (desc >> 28) & 0x0F, (desc >> 32) & 0xFF, warp_id,
                               blockIdx.x, blockIdx.y, blockIdx.z, clock,
                               desc & 0x0FFFFFFF, inst_id);
     RECORD_ADDR(record, 0) = addr;
     RECORD_ADDR_META(record, 0) = 1;
-    /*
-      record->header = ((uint32_t)1 << 24) | ((uint32_t)((desc >> 32) | 0xFF) << 16);
-      record->warp = warp_id;
-      record->cta  = cta;
-      record->type_size = (uint32_t)(desc & 0xFFFFFFFF);
-      record->clock = clock_val;
-      record->addr = addr;
-    */
-    //record->desc = desc;
-    /*
-      uint64_t meta = clock_val & 0xFFFFFFFF;
-      meta <<= 16;
-      meta |= warp_id & 0xFFFF;
-      meta <<= 8;
-      meta |= lane_id & 0xFF;
-      meta <<= 8;
-      record->meta = meta;
-    */
+    
     __threadfence_system();
 
     if (lane_id == lowest ) atomicAdd(commit, n_active);
