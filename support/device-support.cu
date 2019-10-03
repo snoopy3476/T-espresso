@@ -21,11 +21,11 @@ extern "C" {
     uint32_t n_active = __popc(active);
     uint32_t lowest   = __ffs(active)-1;
 
-    uint32_t *alloc = (uint32_t*)(&allocs[slot * CACHELINE]);
-    uint32_t *commit = (uint32_t*)(&commits[slot * CACHELINE]);
+    uint32_t* alloc = (uint32_t*)(&allocs[slot * CACHELINE]);
+    uint32_t* commit = (uint32_t*)(&commits[slot * CACHELINE]);
 
-    volatile uint32_t *valloc = alloc;
-    volatile uint32_t *vcommit = commit;
+    volatile uint32_t* valloc = alloc;
+    volatile uint32_t* vcommit = commit;
     unsigned int id = 0;
     
     uint32_t slot_offset = slot * SLOTS_SIZE;
@@ -40,11 +40,11 @@ extern "C" {
     }
 
     uint32_t record_offset = __shfl_sync(0xFFFFFFFF, id, lowest) + rlane_id;
-    record_t *record = (record_t*) &(records[(slot_offset + record_offset) * RECORD_SIZE]);
+    record_t* record = (record_t*) &(records[(slot_offset + record_offset) * RECORD_SIZE]);
     
-    *record = RECORD_SET_INIT(1, (desc >> 28) & 0x0F, (desc >> 32) & 0xFF, warp_id,
-                              blockIdx.x, blockIdx.y, blockIdx.z, clock,
-                              desc & 0x0FFFFFFF, inst_id);
+    *record = (record_t) RECORD_SET_INIT(1, (desc >> 28) & 0x0F, (desc >> 32) & 0xFF, warp_id,
+                                         blockIdx.x, blockIdx.y, blockIdx.z, clock,
+                                         desc & 0x0FFFFFFF, inst_id);
     RECORD_ADDR(record, 0) = addr;
     RECORD_ADDR_META(record, 0) = 1;
     

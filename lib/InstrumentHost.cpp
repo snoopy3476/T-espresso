@@ -38,47 +38,12 @@
 
 #include "LocateKCalls.h"
 
-#define INCLUDE_LLVM_MEMTRACE_STUFF
+#define INCLUDE_LLVM_CUPROF_TRACE_STUFF
 #include "Common.h"
 
-#define DEBUG_TYPE "memtrace-host"
-#define TRACE_DEBUG_DATA "___CUDATRACE_DEBUG_DATA"
+#define DEBUG_TYPE "cuprof-host"
 
 using namespace llvm;
-
-
-/*
-void createPrintf(IRBuilder<> &IRB, const Twine &fmt, ArrayRef<Value*> values) {
-  Module &M = *IRB.GetInsertBlock()->getModule();
-  Function* Printf = M.getFunction("printf");
-  if (Printf) {
-    auto *FormatGlobal = IRB.CreateGlobalString(fmt.getSingleStringRef());
-    Type* charPtrTy = IRB.getInt8Ty()->getPointerTo();
-    Value* Format = IRB.CreateBitCast(FormatGlobal, charPtrTy);
-    SmallVector<Value*, 4> args;
-    args.append({Format});
-    args.append(values.begin(), values.end());
-    IRB.CreateCall(Printf, args);
-  }
-}
-
-Instruction* createMalloc(IRBuilder<> &IRB, Type *ty,
-  Value *count = nullptr) {
-  Type* int32_ty = IRB.getInt32Ty();
-  Type* int64_ty = IRB.getInt64Ty();
-  if (count == nullptr) {
-    count = ConstantInt::get(int64_ty, 1);
-  }
-    
-  Constant* ty_size = ConstantExpr::getSizeOf(ty);
-  Constant* elem_size = ConstantExpr::getTruncOrBitCast(ty_size, int32_ty);
-  Instruction* malloc_inst = CallInst::CreateMalloc(IRB.GetInsertBlock(),
-                                                    int32_ty, ty, elem_size,
-                                                    count, nullptr, "");
-  return IRB.Insert(malloc_inst);
-}
-*/
-  
 
 
 struct InstrumentHostPass : public ModulePass {
@@ -87,22 +52,22 @@ struct InstrumentHostPass : public ModulePass {
   
   InstrumentHostPass(InstrumentPassArg passargs = args_default) : ModulePass(ID), args(passargs) {}
 
-  Type* traceInfoTy = nullptr;
-  Type *SizeTy = nullptr;
-  Type *SizePtrTy = nullptr;
-  Type *CudaMemcpyKindTy = nullptr;
-  Type *CudaErrorTy = nullptr;
+  Type* trace_info_ty = nullptr;
+  Type* size_ty = nullptr;
+  Type* sizep_ty = nullptr;
+  Type* cuda_memcpy_kind_ty = nullptr;
+  Type* cuda_err_ty = nullptr;
 
-  Constant *AccdatCtor = nullptr;
-  Constant *AccdatDtor = nullptr;
-  Constant *AccdatAppend = nullptr;
-  Constant *TraceFillInfo = nullptr;
-  Constant *TraceCopyToSymbol = nullptr;
-  Constant *TraceTouch = nullptr;
-  Constant *TraceStart = nullptr;
-  Constant *TraceStop = nullptr;
-  Constant *CudaMemcpyFromSymbol = nullptr;
-  Constant *CudaGetSymbolSize = nullptr;
+  Constant* accdat_ctor = nullptr;
+  Constant* accdat_dtor = nullptr;
+  Constant* accdat_append = nullptr;
+  Constant* trc_fill_info = nullptr;
+  Constant* trc_copy_to_symbol = nullptr;
+  Constant* trc_touch = nullptr;
+  Constant* trc_start = nullptr;
+  Constant* trc_stop = nullptr;
+  Constant* cuda_memcpy_from_symbol = nullptr;
+  Constant* cuda_get_symbol_size = nullptr;
 
   /** Sets up pointers to (and inserts prototypes of) the utility functions
    * from the host-support library.
@@ -117,48 +82,44 @@ struct InstrumentHostPass : public ModulePass {
    * void __trace_stop(cudaStream_t stream);
    */
 
-  void initTypes(Module &M) {
-    LLVMContext &ctx = M.getContext();
+  void initTypes(Module& module) {
+    LLVMContext& ctx = module.getContext();
     
-    Type *Int8Ty = Type::getInt8Ty(ctx);
-    Type *Int32Ty = Type::getInt32Ty(ctx);
-    Type *Int64Ty = Type::getInt64Ty(ctx);
-    
-    traceInfoTy = getTraceInfoType(M.getContext());
-    SizeTy = Type::getIntNTy(ctx, sizeof(size_t) * 8);
-    SizePtrTy = Type::getIntNPtrTy(ctx, sizeof(size_t) * 8);
-    CudaMemcpyKindTy = Type::getIntNTy(ctx, sizeof(cudaMemcpyKind) * 8);
-    CudaErrorTy = Type::getIntNTy(ctx, sizeof(cudaError_t) * 8);
+    trace_info_ty = getTraceInfoType(module.getContext());
+    size_ty = Type::getIntNTy(ctx, sizeof(size_t) * 8);
+    sizep_ty = Type::getIntNPtrTy(ctx, sizeof(size_t) * 8);
+    cuda_memcpy_kind_ty = Type::getIntNTy(ctx, sizeof(cudaMemcpyKind) * 8);
+    cuda_err_ty = Type::getIntNTy(ctx, sizeof(cudaError_t) * 8);
   }
   
 
-  GlobalVariable* getOrCreateGlobalVar(Module &M, Type* T, const Twine &name) {
+  GlobalVariable* getOrCreateGlobalVar(Module& module, Type* ty, const Twine& name) {
     // first see if the variable already exists
   
-    GlobalVariable *Global = M.getGlobalVariable(name.getSingleStringRef());
-    if (Global) {
-      return Global;
+    GlobalVariable* gv = module.getGlobalVariable(name.getSingleStringRef());
+    if (gv) {
+      return gv;
     }
 
     // Variable does not exist, so we create one and register it.
     // This happens if a kernel is called in a module it is not registered in.
-    Constant *zero = Constant::getNullValue(T);
-    Global = new GlobalVariable(M, T, false, GlobalValue::LinkOnceAnyLinkage, zero, name);
-    Global->setAlignment(8);
-    assert(Global != nullptr);
-    return Global;
+    Constant* zero = Constant::getNullValue(ty);
+    gv = new GlobalVariable(module, ty, false, GlobalValue::LinkOnceAnyLinkage, zero, name);
+    gv->setAlignment(8);
+    assert(gv != nullptr);
+    return gv;
   }
 
   template <typename T>
-  GlobalVariable* getOrInsertGlobalArray(Module &M, std::vector<T> input, const char* name) {
-    LLVMContext& ctx = M.getContext();
+  GlobalVariable* getOrInsertGlobalArray(Module& module, std::vector<T> input, const char* name) {
+    LLVMContext& ctx = module.getContext();
 
-    GlobalVariable* gv = M.getNamedGlobal(name);
+    GlobalVariable* gv = module.getNamedGlobal(name);
     
     if (!gv) {
       ArrayRef<T> dref = ArrayRef<T>(input.data(), input.size());
       Constant* init = ConstantDataArray::get(ctx, dref);
-      gv = new GlobalVariable(M, init->getType(), true,
+      gv = new GlobalVariable(module, init->getType(), true,
                               GlobalValue::InternalLinkage,
                               init, name);
     }
@@ -166,54 +127,54 @@ struct InstrumentHostPass : public ModulePass {
     return gv;
   }
   
-  void findOrInsertRuntimeFunctions(Module &M) {
-    LLVMContext &ctx = M.getContext();
-    Type* i8PtrTy = Type::getInt8PtrTy(ctx);
-    Type* i32PtrTy = Type::getInt32PtrTy(ctx);
-    Type* i64PtrTy = Type::getInt64PtrTy(ctx);
-    Type* voidPtrTy = i8PtrTy;
-    Type* stringTy = i8PtrTy;
+  void findOrInsertRuntimeFunctions(Module& module) {
+    LLVMContext& ctx = module.getContext();
+    Type* i8p_ty = Type::getInt8PtrTy(ctx);
+    Type* i32p_ty = Type::getInt32PtrTy(ctx);
+    Type* i64p_ty = Type::getInt64PtrTy(ctx);
+    Type* voidp_ty = i8p_ty;
+    Type* string_ty = i8p_ty;
     
-    Type* i8Ty = Type::getInt8Ty(ctx);
-    Type* i16Ty = Type::getInt16Ty(ctx);
-    Type* i32Ty = Type::getInt32Ty(ctx);
-    Type* i64Ty = Type::getInt64Ty(ctx);
-    Type* voidTy = Type::getVoidTy(ctx);
+    Type* i16_ty = Type::getInt16Ty(ctx);
+    Type* i64_ty = Type::getInt64Ty(ctx);
+    Type* void_ty = Type::getVoidTy(ctx);
 
 
     
-    AccdatCtor = M.getOrInsertFunction("___cuprof_accdat_ctor",
-                                       voidTy);
-    AccdatDtor = M.getOrInsertFunction("___cuprof_accdat_dtor",
-                                       voidTy);
-    AccdatAppend = M.getOrInsertFunction("___cuprof_accdat_append",
-                                         voidTy, stringTy, i64Ty);
+    accdat_ctor = module.getOrInsertFunction("___cuprof_accdat_ctor",
+                                       void_ty);
+    accdat_dtor = module.getOrInsertFunction("___cuprof_accdat_dtor",
+                                       void_ty);
+    accdat_append = module.getOrInsertFunction("___cuprof_accdat_append",
+                                         void_ty, string_ty, i64_ty);
 
     
-    TraceFillInfo = M.getOrInsertFunction("__trace_fill_info",
-                                          voidTy, voidPtrTy, i8PtrTy);
-    TraceCopyToSymbol = M.getOrInsertFunction("__trace_copy_to_symbol",
-                                              voidTy, i8PtrTy, voidPtrTy, voidPtrTy);
-    TraceTouch = M.getOrInsertFunction("__trace_touch",
-                                       voidTy, i8PtrTy, i8PtrTy, i64PtrTy, i32PtrTy, SizePtrTy);
-    TraceStart = M.getOrInsertFunction("__trace_start",
-                                       voidTy, i8PtrTy, stringTy, i16Ty);
-    TraceStop = M.getOrInsertFunction("__trace_stop",
-                                      voidTy, i8PtrTy);
+    trc_fill_info = module.getOrInsertFunction("__trace_fill_info",
+                                          void_ty, voidp_ty, i8p_ty);
+    trc_copy_to_symbol = module.getOrInsertFunction("__trace_copy_to_symbol",
+                                              void_ty, i8p_ty, voidp_ty, voidp_ty);
+    trc_touch = module.getOrInsertFunction("__trace_touch",
+                                       void_ty, i8p_ty, i8p_ty, i64p_ty, i32p_ty,
+                                       size_ty, size_ty, size_ty);
+    trc_start = module.getOrInsertFunction("__trace_start",
+                                       void_ty, i8p_ty, string_ty, i16_ty);
+    trc_stop = module.getOrInsertFunction("__trace_stop",
+                                      void_ty, i8p_ty);
     
-    CudaMemcpyFromSymbol = M.getOrInsertFunction("cudaMemcpyFromSymbol",
-                                                 CudaErrorTy, i8PtrTy, i8PtrTy, SizeTy, SizeTy, CudaMemcpyKindTy);
-    CudaGetSymbolSize = M.getOrInsertFunction("cudaGetSymbolSize",
-                                              CudaErrorTy, i8PtrTy, i8PtrTy);
+    cuda_memcpy_from_symbol = module.getOrInsertFunction("cudaMemcpyFromSymbol",
+                                                 cuda_err_ty, i8p_ty, i8p_ty,
+                                                 size_ty, size_ty, cuda_memcpy_kind_ty);
+    cuda_get_symbol_size = module.getOrInsertFunction("cudaGetSymbolSize",
+                                              cuda_err_ty, i8p_ty, i8p_ty);
   }
 
   /** Updates kernel calls to set up tracing infrastructure on host and device
    * before starting the kernel and tearing everything down afterwards.
    */
-  void patchKernelCall(CallInst *configureCall, Instruction* launch,
-                       const StringRef kernelName) {
-    assert(configureCall->getNumArgOperands() == 6);
-    auto *stream = configureCall->getArgOperand(5);
+  void patchKernelCall(CallInst* configure_call, Instruction* launch,
+                       const StringRef kernel_name) {
+    assert(configure_call->getNumArgOperands() == 6);
+    auto* stream = configure_call->getArgOperand(5);
 
     // insert preparational steps directly after cudaConfigureCall
     // 0. touch consumer to create new one if necessary
@@ -222,117 +183,123 @@ struct InstrumentHostPass : public ModulePass {
     // 3. copy trace consumer info to device
 
 
-    IRBuilder<> IRB(configureCall->getNextNode());
+    IRBuilder<> irb(configure_call->getNextNode());
 
-    Type* i8Ty = IRB.getInt8Ty();
-    Type* i16Ty = IRB.getInt16Ty();
-    Type* i32Ty = IRB.getInt32Ty();
-    Type* i64Ty = IRB.getInt64Ty();
-    Type* i8PtrTy = IRB.getInt8Ty()->getPointerTo();
-    Type* i16PtrTy = IRB.getInt16Ty()->getPointerTo();
-    Type* i32PtrTy = IRB.getInt32Ty()->getPointerTo();
-    Type* i64PtrTy = IRB.getInt64Ty()->getPointerTo();
+    Type* i8_ty = irb.getInt8Ty();
+    Type* i16_ty = irb.getInt16Ty();
+    Type* i32_ty = irb.getInt32Ty();
+    Type* i64_ty = irb.getInt64Ty();
+    Type* i8p_ty = irb.getInt8Ty()->getPointerTo();
+    Type* i32p_ty = irb.getInt32Ty()->getPointerTo();
+    Type* i64p_ty = irb.getInt64Ty()->getPointerTo();
 
-    Value* kernelNameVal = IRB.CreateGlobalStringPtr(kernelName);
+    Value* kernel_name_val = irb.CreateGlobalStringPtr(kernel_name);
 
     // try adding in global symbol + cuda registration
-    Module &M = *configureCall->getModule();
+    Module& module = *configure_call->getModule();
 
-    Type* GlobalVarType = traceInfoTy;
-    std::string kernelSymbolName = getSymbolNameForKernel(kernelName);
-    //printf("kernelName : %s\n", kernelName.str().c_str());
+    Type* gv_ty = trace_info_ty;
+    std::string kernel_symbol_name = getSymbolNameForKernel(kernel_name.str());
+    //printf("kernel_name : %s\n", kernel_name.str().c_str());
 
-    GlobalVariable *globalVar = getOrCreateGlobalVar(M, GlobalVarType, kernelSymbolName);
+    GlobalVariable* gv = getOrCreateGlobalVar(module, gv_ty, kernel_symbol_name);
 
-    auto *globalVarPtr = IRB.CreateBitCast(globalVar, i8PtrTy);
-    auto* streamPtr = IRB.CreateBitCast(stream, i8PtrTy);
+    auto* gv_ptr = irb.CreateBitCast(gv, i8p_ty);
+    auto* stream_ptr = irb.CreateBitCast(stream, i8p_ty);
 
 
 
     // Thread block size of the current kernel call
       
-    Instruction::CastOps castOp_i64_i16 = CastInst::getCastOpcode(
-      Constant::getNullValue(i64Ty), false, i16Ty, false);
-    Instruction::CastOps castOp_i32_i16 = CastInst::getCastOpcode(
-      Constant::getNullValue(i32Ty), false, i16Ty, false);
+    Instruction::CastOps castop_i64_i16 = CastInst::getCastOpcode(
+      Constant::getNullValue(i64_ty), false, i16_ty, false);
+    Instruction::CastOps castop_i32_i16 = CastInst::getCastOpcode(
+      Constant::getNullValue(i32_ty), false, i16_ty, false);
       
-    Value *blockSize = configureCall->getArgOperand(2);   // <32 bit: y> <32 bit: x>
-    Value *blockSize_z = configureCall->getArgOperand(3); // <32 bit: z>
-    blockSize = IRB.CreateMul(
-      IRB.CreateAnd(blockSize, 0xFFFFFFFF),
-      IRB.CreateLShr(blockSize, 32)
+    Value* blockSize = configure_call->getArgOperand(2);   // <32 bit: y> <32 bit: x>
+    Value* blockSize_z = configure_call->getArgOperand(3); // <32 bit: z>
+    blockSize = irb.CreateMul(
+      irb.CreateAnd(blockSize, 0xFFFFFFFF),
+      irb.CreateLShr(blockSize, 32)
       ); // x * y
-    blockSize = IRB.CreateMul(
-      IRB.CreateCast(castOp_i64_i16, blockSize, i16Ty),
-      IRB.CreateCast(castOp_i32_i16, blockSize_z, i16Ty)
+    blockSize = irb.CreateMul(
+      irb.CreateCast(castop_i64_i16, blockSize, i16_ty),
+      irb.CreateCast(castop_i32_i16, blockSize_z, i16_ty)
       ); // <uint16_t>(x*y) * <uint16_t>z
 
     
 
     // set trace filter info
     
-    GlobalVariable* sm_gv = getOrInsertGlobalArray<uint8_t>(M, args.sm, "___cuprof_sm_filter");
-    Constant* sm = ConstantExpr::getPointerCast(sm_gv, i8PtrTy);
+    GlobalVariable* sm_gv = getOrInsertGlobalArray<uint8_t>(module, args.sm, "___cuprof_sm_filter");
+    Constant* sm = ConstantExpr::getPointerCast(sm_gv, i8p_ty);
     
-    GlobalVariable* cta_gv = getOrInsertGlobalArray<uint64_t>(M, args.cta, "___cuprof_cta_filter");
-    Constant* cta = ConstantExpr::getPointerCast(cta_gv, i64PtrTy);
+    GlobalVariable* cta_gv = getOrInsertGlobalArray<uint64_t>(module, args.cta, "___cuprof_cta_filter");
+    Constant* cta = ConstantExpr::getPointerCast(cta_gv, i64p_ty);
     
-    GlobalVariable* warp_gv = getOrInsertGlobalArray<uint32_t>(M, args.warp, "___cuprof_warp_filter");
-    Constant* warp = ConstantExpr::getPointerCast(warp_gv, i32PtrTy);
-
+    GlobalVariable* warp_gv = getOrInsertGlobalArray<uint32_t>(module, args.warp, "___cuprof_warp_filter");
+    Constant* warp = ConstantExpr::getPointerCast(warp_gv, i32p_ty);
     
 
-    std::vector<size_t> filter_size_vec = {args.sm.size(), args.cta.size(), args.warp.size()};
-    GlobalVariable* filter_size_gv = getOrInsertGlobalArray<size_t>(M, filter_size_vec, "___cuprof_filter_size");
-    Constant* filter_size = ConstantExpr::getPointerCast(filter_size_gv, SizePtrTy);
+    //std::vector<size_t> filter_size_vec({args.sm.size(), args.cta.size(), args.warp.size()});
+    //GlobalVariable* filter_size_gv = getOrInsertGlobalArray<size_t>(module, filter_size_vec, "___cuprof_filter_size");
+    Constant* sm_size = ConstantInt::get(size_ty, args.sm.size());
+    Constant* cta_size = ConstantInt::get(size_ty, args.cta.size());
+    Constant* warp_size = ConstantInt::get(size_ty, args.warp.size());
+
+// ConstantExpr::getPointerCast(filter_size_gv, Sizep_ty);
+
+    Value* trace_touch_args[] = {stream_ptr, sm, cta, warp, sm_size, cta_size, warp_size};
+    Value* trace_start_args[] = {stream_ptr, kernel_name_val, blockSize};
+    irb.CreateCall(trc_touch, trace_touch_args);
+    irb.CreateCall(trc_start, trace_start_args);
+
+    const DataLayout& dat_layout = configure_call->getParent()->getParent()->getParent()->getDataLayout();
+
+    size_t buflen = dat_layout.getTypeStoreSize(gv_ty);
+    Value* buf_info = irb.CreateAlloca(i8_ty, irb.getInt32(buflen));
     
+    Value* trace_fill_info_args[] = {buf_info, stream_ptr};
+    irb.CreateCall(trc_fill_info, trace_fill_info_args);
     
-    IRB.CreateCall(TraceTouch, {streamPtr, sm, cta, warp, filter_size});
-    IRB.CreateCall(TraceStart, {streamPtr, kernelNameVal, blockSize});
+    Value* trace_copy_to_symbol_args[] = {stream_ptr, gv_ptr, buf_info};
+    irb.CreateCall(trc_copy_to_symbol, trace_copy_to_symbol_args);
 
-    const DataLayout &DL = configureCall->getParent()->getParent()->getParent()->getDataLayout();
-
-    size_t bufSize = DL.getTypeStoreSize(GlobalVarType);
-
-    Value* infoBuf = IRB.CreateAlloca(i8Ty, IRB.getInt32(bufSize));
-    IRB.CreateCall(TraceFillInfo, {infoBuf, streamPtr});
-    IRB.CreateCall(TraceCopyToSymbol, {streamPtr, globalVarPtr, infoBuf});
-
-    // insert finishing steps after kernel launch was issued
-    // 1. stop trace consumer
-    IRB.SetInsertPoint(launch->getNextNode());
-    IRB.CreateCall(TraceStop, {streamPtr});
+    irb.SetInsertPoint(launch->getNextNode());
+    
+    Value* trace_stop_args[] = {stream_ptr};
+    irb.CreateCall(trc_stop, trace_stop_args);
   }
 
 
   
 #define GLOBAL_CTOR_ARR_NAME "llvm.global_ctors"
 #define GLOBAL_DTOR_ARR_NAME "llvm.global_dtors"
-#define GLOBAL_CDTOR_DEFAULT_PRIORITY 2147483647
+#define GLOBAL_CDTOR_DEFAULT_PRIORITY ((uint32_t)2147483647)
   
   enum GlobalCdtorType {
     GLOBAL_CTOR = 0,
     GLOBAL_DTOR = 1
   };
 
-  bool appendGlobalCtorDtor(Module &M, Function *func, GlobalCdtorType type,
+  bool appendGlobalCtorDtor(Module& module, Function *func, GlobalCdtorType type,
                             uint32_t priority = GLOBAL_CDTOR_DEFAULT_PRIORITY) {
 
     if (!func) return false;
 
     
-    LLVMContext &ctx = M.getContext();
+    LLVMContext& ctx = module.getContext();
     
-    Type *VoidTy = Type::getVoidTy(ctx);
-    Type *Int32Ty = Type::getInt32Ty(ctx);
-    Type *Int8PtrTy = Type::getInt8PtrTy(ctx);
-    FunctionType* CtorFTy = FunctionType::get(VoidTy, false);
-    Type *CtorPFTy = PointerType::getUnqual(CtorFTy);
-    StructType *CtorStructTy = StructType::get(
-      (Type*) Int32Ty, (Type*) PointerType::getUnqual(CtorFTy), (Type*) Int8PtrTy);
+    Type* void_ty = Type::getVoidTy(ctx);
+    Type* i32_ty = Type::getInt32Ty(ctx);
+    Type* i8p_ty = Type::getInt8PtrTy(ctx);
+    FunctionType* ctor_fty = FunctionType::get(void_ty, false);
+    Type* ctorp_fty = PointerType::getUnqual(ctor_fty);
+    StructType* ctor_sty = StructType::get(
+      (Type*) i32_ty, (Type*) PointerType::getUnqual(ctor_fty), (Type*) i8p_ty);
 
     
-    const char * gv_name;
+    const char* gv_name;
     switch (type) {
       
     case GLOBAL_DTOR: // dtor
@@ -345,10 +312,8 @@ struct InstrumentHostPass : public ModulePass {
     }
 
     
-    GlobalVariable* gv = M.getNamedGlobal(gv_name);
-    
+    GlobalVariable* gv = module.getNamedGlobal(gv_name);
     SmallVector<Constant *, 1024> init_elem;
-    Constant *init = nullptr;
 
     if (gv != nullptr) {
       if (auto init_old = dyn_cast<ConstantArray>(gv->getInitializer())) {
@@ -366,18 +331,18 @@ struct InstrumentHostPass : public ModulePass {
 
     // append created function to global ctor
     
-    Constant *gv_new[] = {
-      ConstantInt::get(Int32Ty, priority, false),
-      ConstantExpr::getBitCast(func, CtorPFTy),
-      Constant::getNullValue(Int8PtrTy)
+    Constant* gv_new[] = {
+      ConstantInt::get(i32_ty, priority, false),
+      ConstantExpr::getBitCast(func, ctorp_fty),
+      Constant::getNullValue(i8p_ty)
     };
-    init_elem.push_back(ConstantStruct::get(CtorStructTy, gv_new));
+    init_elem.push_back(ConstantStruct::get(ctor_sty, gv_new));
     
     
     ArrayRef<Constant *> init_elem_arr(init_elem.begin(), init_elem.end());
-    ArrayType *cdtor_arr_ty = ArrayType::get(CtorStructTy, init_elem.size());
+    ArrayType* cdtor_arr_ty = ArrayType::get(ctor_sty, init_elem.size());
     
-    new GlobalVariable(M, cdtor_arr_ty, false,
+    new GlobalVariable(module, cdtor_arr_ty, false,
                        GlobalValue::AppendingLinkage,
                        ConstantArray::get(cdtor_arr_ty, init_elem_arr),
                        gv_name);
@@ -388,75 +353,80 @@ struct InstrumentHostPass : public ModulePass {
 
   
 
-  bool getKernelDebugData(Module &M, const std::string kernelName) {
+  bool getKernelDebugData(Module& module, const std::string kernel_name) {
 
-    std::string varname = getSymbolNameForKernel(kernelName, SYMBOL_DATA_VAR);
-    std::string funcname = getSymbolNameForKernel(kernelName, SYMBOL_DATA_FUNC);
+    std::string varname = getSymbolNameForKernel(kernel_name, SYMBOL_DATA_VAR);
+    std::string funcname = getSymbolNameForKernel(kernel_name, SYMBOL_DATA_FUNC);
 
     // add function
-    LLVMContext &ctx = M.getContext();
-    Function* func = dyn_cast<Function>(M.getOrInsertFunction(
+    LLVMContext& ctx = module.getContext();
+    Function* func = dyn_cast<Function>(module.getOrInsertFunction(
                                           funcname.c_str(),
-                                          Type::getVoidTy(ctx), NULL) );
+                                          Type::getVoidTy(ctx)) );
     if (!func || !func->empty()) return false;
     func->setCallingConv(CallingConv::C);
 
 
     
     // types
-    Type *Int8Ty = Type::getInt8Ty(ctx);
-    Type *Int32Ty = Type::getInt32Ty(ctx);
-    Type *Int8PtrTy = Type::getInt8PtrTy(ctx);
+    Type* i8_ty = Type::getInt8Ty(ctx);
+    Type* i8p_ty = Type::getInt8PtrTy(ctx);
     
 
 
     // add entry block for function
     BasicBlock* block = BasicBlock::Create(ctx, "entry", func);
-    IRBuilder<> IRB(block);
+    IRBuilder<> irb(block);
 
-    GlobalVariable *var_link = M.getNamedGlobal(varname);
+    GlobalVariable* var_link = module.getNamedGlobal(varname);
     if (var_link == nullptr) {
-      var_link = new GlobalVariable(M, Int8PtrTy, false,
+      var_link = new GlobalVariable(module, i8p_ty, false,
                                     GlobalValue::LinkOnceAnyLinkage,
-                                    Constant::getNullValue(Int8PtrTy),
+                                    Constant::getNullValue(i8p_ty),
                                     varname.c_str());
     }
-    Value *var_sym = IRB.CreatePointerCast(var_link, Int8PtrTy);
+    Value* var_sym = irb.CreatePointerCast(var_link, i8p_ty);
 
     
-    Value *varlen_alloca = IRB.CreateAlloca(SizeTy);
-    Value *varlen_voidptr = IRB.CreatePointerCast(varlen_alloca, Int8PtrTy);
-    IRB.CreateStore(ConstantInt::get(SizeTy, 0), varlen_alloca);
-    IRB.CreateCall(CudaGetSymbolSize, {varlen_voidptr, var_sym});
-    Value* varlen_val = IRB.CreateLoad(SizeTy, varlen_alloca);
+    Value* varlen_alloca = irb.CreateAlloca(size_ty);
+    Value* varlen_voidptr = irb.CreatePointerCast(varlen_alloca, i8p_ty);
+    irb.CreateStore(ConstantInt::get(size_ty, 0), varlen_alloca);
+    
+    Value* cuda_get_symbol_size_args[] = {varlen_voidptr, var_sym};
+    irb.CreateCall(cuda_get_symbol_size, cuda_get_symbol_size_args);
+    
+    Value* varlen_val = irb.CreateLoad(size_ty, varlen_alloca);
 
 
     
-    Value *var_alloca = IRB.CreateAlloca(Int8Ty, varlen_val);
-    IRB.CreateCall(CudaMemcpyFromSymbol, {var_alloca, var_sym,
-      varlen_val,
-      ConstantInt::get(SizeTy, 0),
-      ConstantInt::get(CudaMemcpyKindTy,
-      cudaMemcpyDeviceToHost)});
-                  
-    IRB.CreateCall(AccdatAppend, {var_alloca, varlen_val});
-    IRB.CreateRetVoid();
+    Value* var_alloca = irb.CreateAlloca(i8_ty, varlen_val);
+    Value* cuda_memcpy_from_symbol_args[] = {var_alloca, var_sym,
+                                             varlen_val,
+                                             ConstantInt::get(size_ty, 0),
+                                             ConstantInt::get(cuda_memcpy_kind_ty,
+                                                              cudaMemcpyDeviceToHost)};
+    irb.CreateCall(cuda_memcpy_from_symbol, cuda_memcpy_from_symbol_args);
+
+    Value* accdat_append_args[] = {var_alloca, varlen_val};
+    irb.CreateCall(accdat_append, accdat_append_args);
+    
+    irb.CreateRetVoid();
 
 
 
     // append created function to global ctor
-    appendGlobalCtorDtor(M, func, GLOBAL_CTOR, GLOBAL_CDTOR_DEFAULT_PRIORITY + 1);
+    appendGlobalCtorDtor(module, func, GLOBAL_CTOR, GLOBAL_CDTOR_DEFAULT_PRIORITY + 1);
     
     
     return true;
   }
 
   
-  void RegisterVars(Function *CudaSetup, ArrayRef<GlobalVariable*> Variables) {
-    Module &M = *CudaSetup->getParent();
-    IRBuilder<> IRB(M.getContext());
+  void RegisterVars(Function* cuda_setup_func, ArrayRef<GlobalVariable*> vars) {
+    Module& module = *cuda_setup_func->getParent();
+    IRBuilder<> irb(module.getContext());
 
-    IRB.SetInsertPoint(&CudaSetup->back().back());
+    irb.SetInsertPoint(&cuda_setup_func->back().back());
 
     /** Get declaration of __cudaRegisterVar.
      * Protype:
@@ -465,34 +435,32 @@ struct InstrumentHostPass : public ModulePass {
      *   int ext, int size, int constant, int global);
      */
     // no void*/* in llvm, we use i8*/* instead
-    Type* voidPtrPtrTy = IRB.getInt8Ty()->getPointerTo()->getPointerTo();
-    Type* charPtrTy = IRB.getInt8Ty()->getPointerTo();
-    Type* intTy = IRB.getInt32Ty();
-    auto *FnTy = FunctionType::get(intTy, {voidPtrPtrTy,
-                                           charPtrTy, charPtrTy, charPtrTy,
-                                           intTy, intTy, intTy, intTy}, false);
-    auto *Fn = M.getOrInsertFunction("__cudaRegisterVar", FnTy);
-    assert(Fn != nullptr);
+    Type* voidpp_ty = irb.getInt8Ty()->getPointerTo()->getPointerTo();
+    Type* charp_ty = irb.getInt8Ty()->getPointerTo();
+    Type* int_ty = irb.getInt32Ty();
+    Type* fnty_arg[] = {voidpp_ty,
+                       charp_ty, charp_ty, charp_ty,
+                       int_ty, int_ty, int_ty, int_ty};
+    auto* fty = FunctionType::get(int_ty, fnty_arg, false);
+    auto* func = module.getOrInsertFunction("__cudaRegisterVar", fty);
+    assert(func != nullptr);
 
-    for (auto *Global : Variables) {
+    for (auto* gv : vars) {
 
-      auto *GlobalNameLiteral = IRB.CreateGlobalString(Global->getName());
-      auto *GlobalName = IRB.CreateBitCast(GlobalNameLiteral, charPtrTy);
-      auto *GlobalAddress = IRB.CreateBitCast(Global, charPtrTy);
-      uint64_t GlobalSize = M.getDataLayout().getTypeStoreSize(Global->getType());
-      Value *CubinHandle = &*CudaSetup->arg_begin();
+      auto* gv_name_literal = irb.CreateGlobalString(gv->getName());
+      auto* gv_name = irb.CreateBitCast(gv_name_literal, charp_ty);
+      auto* gv_addr = irb.CreateBitCast(gv, charp_ty);
+      uint64_t gv_size = module.getDataLayout().getTypeStoreSize(gv->getType());
+      Value* cubin_handle = &*cuda_setup_func->arg_begin();
 
-      //createPrintf(IRB, "registering... symbol name: %s, symbol address: %p, name address: %p\n",
-      //    {GlobalName, GlobalAddress, GlobalName});
-      //errs() << "registering device symbol " << Global->getName().str() << "\n";
-
-      IRB.CreateCall(Fn, {CubinHandle, GlobalAddress, GlobalName, GlobalName,
-                          IRB.getInt32(0), IRB.getInt32(GlobalSize), IRB.getInt32(0), IRB.getInt32(0)});
+      Value* fn_args[] = {cubin_handle, gv_addr, gv_name, gv_name,
+                          irb.getInt32(0), irb.getInt32(gv_size), irb.getInt32(0), irb.getInt32(0)};
+      irb.CreateCall(func, fn_args);
     }
   }
 
 
-
+  // std::set string comparator (check if same)
   static bool setStrComparator(const std::string& lhs,
                                const std::string& rhs) {
     return lhs.compare(rhs) != 0;
@@ -502,71 +470,69 @@ struct InstrumentHostPass : public ModulePass {
                     bool(*)(const std::string& lhs,
                             const std::string& rhs)> kernelListSet;
 
-  void createAndRegisterTraceVars(Function* CudaSetup, Type* VarType,
+  void createAndRegisterTraceVars(Function* cuda_setup_func, Type* ty,
                                   kernelListSet kernel_list) {
-    Module &M = *CudaSetup->getParent();
+    Module& module = *cuda_setup_func->getParent();
     //SmallVector<Function*, 8> registeredKernels;
-    SmallVector<GlobalVariable*, 1024> globalVars;
+    SmallVector<GlobalVariable*, 1024> gvs;
 
 
-    //globalVars.push_back(testGlobal(M));
+    //gvs.push_back(testGlobal(module));
 
   
     // do works on kernels for access data info
     for (auto kernel_name = kernel_list.cbegin();
          kernel_name != kernel_list.cend();
          ++kernel_name) {
-      getKernelDebugData(M, *kernel_name);
+      getKernelDebugData(module, *kernel_name);
 
       std::string accdat_var_str = getSymbolNameForKernel(*kernel_name, SYMBOL_DATA_VAR);
-      if (GlobalVariable *accdat_var_gv = M.getNamedGlobal(accdat_var_str))
-        globalVars.push_back(accdat_var_gv);
+      if (GlobalVariable* accdat_var_gv = module.getNamedGlobal(accdat_var_str))
+        gvs.push_back(accdat_var_gv);
     }
 
 
   
-    for (Instruction &inst : instructions(CudaSetup)) {
-      auto *call = dyn_cast<CallInst>(&inst);
-      if (call == nullptr) {
+    for (Instruction& inst : instructions(cuda_setup_func)) {
+      auto* callinst = dyn_cast<CallInst>(&inst);
+      if (callinst == nullptr) {
         continue;
       }
-      auto *callee = call->getCalledFunction();
+      auto* callee = callinst->getCalledFunction();
       if (!callee || callee->getName() != "__cudaRegisterFunction") {
         continue;
       }
 
       // 0: ptx image, 1: wrapper, 2: name, 3: name again, 4+: ?
-      auto *wrapperVal = call->getOperand(1)->stripPointerCasts();
-      assert(wrapperVal != nullptr && "__cudaRegisterFunction called without wrapper");
-      auto *wrapper = dyn_cast<Function>(wrapperVal);
+      auto* wrapper_val = callinst->getOperand(1)->stripPointerCasts();
+      assert(wrapper_val != nullptr && "__cudaRegisterFunction called without wrapper");
+      auto* wrapper = dyn_cast<Function>(wrapper_val);
       assert(wrapper != nullptr && "__cudaRegisterFunction called with something other than a wrapper");
 
-      StringRef kernelName = wrapper->getName();
-      std::string varName = getSymbolNameForKernel(kernelName);
-      GlobalVariable *globalVar = getOrCreateGlobalVar(M, VarType, varName);
-      globalVars.push_back(globalVar);
+      StringRef kernel_name = wrapper->getName();
+      std::string var_name = getSymbolNameForKernel(kernel_name.str());
+      GlobalVariable *gv = getOrCreateGlobalVar(module, ty, var_name);
+      gvs.push_back(gv);
     }
 
-    RegisterVars(CudaSetup, globalVars);
+    RegisterVars(cuda_setup_func, gvs);
   }
 
   
 
 
-  bool runOnModule(Module &M) override {
+  bool runOnModule(Module& module) override {
 
-    LLVMContext &ctx = M.getContext();
-      
-    bool isCUDA = M.getTargetTriple().find("nvptx") != std::string::npos;
-    if (isCUDA) return false;
+    bool is_cuda = module.getTargetTriple().find("nvptx") != std::string::npos;
+    if (is_cuda) return false;
 
       
     // type init
-    initTypes(M);
+    initTypes(module);
 
 
-    //setFuncbaseAttr(M);
-    findOrInsertRuntimeFunctions(M);
+    //setFuncbaseAttr(module);
+    findOrInsertRuntimeFunctions(module);
 
     
 
@@ -577,20 +543,20 @@ struct InstrumentHostPass : public ModulePass {
     kernelListSet kernel_list(&setStrComparator);
 
     // patch calls && collect kernels called
-    for (auto &kcall : getAnalysis<LocateKCallsPass>().getLaunches()) {
-      std::string kernel_name_sym = kcall.kernelName;
+    for (auto& kcall : getAnalysis<LocateKCallsPass>().getLaunches()) {
+      std::string kernel_name_sym = kcall.kernel_name;
 
       
       // kernel filtering
 
-      CallInst *kernel_call = dyn_cast<CallInst>(kcall.kernelLaunch);
-      Function *kernel = nullptr;
+      CallInst* kernel_call = dyn_cast<CallInst>(kcall.kernel_launch);
+      Function* kernel = nullptr;
       if (kernel_call) {
         kernel = kernel_call->getCalledFunction();
       }
       
       if (kernel && kernel_filtering) {
-        DISubprogram * kernel_debuginfo = kernel->getSubprogram();
+        DISubprogram* kernel_debuginfo = kernel->getSubprogram();
         std::string kernel_name_orig;
         if (kernel_debuginfo) {
           kernel_name_orig = kernel_debuginfo->getName().str();
@@ -605,31 +571,32 @@ struct InstrumentHostPass : public ModulePass {
 
       
       // patch kernel call
-      patchKernelCall(kcall.configureCall, kcall.kernelLaunch, kcall.kernelName);
+      patchKernelCall(kcall.configure_call, kcall.kernel_launch, kcall.kernel_name);
 
       
       // insert kernel to list
       kernel_list.insert(kernel_name_sym);
     }
 
-    Function* CudaSetup = M.getFunction("__cuda_register_globals");
+
     
     
     // register global variables for trace info for all kernels registered
     // in this module
-    appendGlobalCtorDtor(M, dyn_cast<Function>(AccdatCtor), GLOBAL_CTOR);
-    appendGlobalCtorDtor(M, dyn_cast<Function>(AccdatDtor), GLOBAL_DTOR);
-    
-    if (CudaSetup != nullptr) {
-      createAndRegisterTraceVars(CudaSetup, traceInfoTy, kernel_list);
+    appendGlobalCtorDtor(module, dyn_cast<Function>(accdat_ctor), GLOBAL_CTOR);
+    appendGlobalCtorDtor(module, dyn_cast<Function>(accdat_dtor), GLOBAL_DTOR);
+
+    Function* cuda_setup_func = module.getFunction("__cuda_register_globals");
+    if (cuda_setup_func != nullptr) {
+      createAndRegisterTraceVars(cuda_setup_func, trace_info_ty, kernel_list);
     }
 
     
     return true;
   }
 
-  void getAnalysisUsage(AnalysisUsage &Info) const override {
-    Info.addRequired<LocateKCallsPass>();
+  void getAnalysisUsage(AnalysisUsage& usage) const override {
+    usage.addRequired<LocateKCallsPass>();
   }
 
 };
@@ -642,4 +609,6 @@ namespace llvm {
   }
 }
 
-static RegisterPass<InstrumentHostPass> X("memtrace-host", "inserts host-side instrumentation for mem-traces", false, false);
+static RegisterPass<InstrumentHostPass> X("cuprof-host",
+                                          "inserts host-side instrumentation for cuprof",
+                                          false, false);

@@ -2,54 +2,52 @@
 
 #include "llvm/IR/Instructions.h"
 
-#include <iostream> //////////////////
-
-#define DEBUG_TYPE "memtrace-locate-kernel-launches"
+#define DEBUG_TYPE "cuprof-locate-kernel-launches"
 
 using namespace llvm;
 
-SmallVector<CallInst*, 4> findConfigureCalls(Module &M) {
-  Function* F = M.getFunction("cudaConfigureCall");
-  if (F == nullptr) {
+SmallVector<CallInst*, 4> findConfigureCalls(Module& module) {
+  Function* func = module.getFunction("cudaConfigureCall");
+  if (func == nullptr) {
     return {};
   }
 
-  SmallVector<CallInst*, 4> R;
-  for (auto *user : F->users()) {
-    auto *CI = dyn_cast<CallInst>(user);
-    if (CI != nullptr) {
-      R.push_back(CI);
+  SmallVector<CallInst*, 4> ret_val;
+  for (auto* user : func->users()) {
+    auto* callinst_cur = dyn_cast<CallInst>(user);
+    if (callinst_cur != nullptr) {
+      ret_val.push_back(callinst_cur);
     }
   }
-  return R;
+  return ret_val;
 }
 
-Instruction* findLaunchFor(CallInst* configureCall) {
-  auto* Terminator = configureCall->getParent()->getTerminator();
-  auto* Br = dyn_cast<BranchInst>(Terminator);
-  if (Br == nullptr) {
-    errs() << "configureCall not followed by kcall.configok\n";
+Instruction* findLaunchFor(CallInst* configure_call) {
+  auto* terminator = configure_call->getParent()->getTerminator();
+  auto* branch_inst = dyn_cast<BranchInst>(terminator);
+  if (branch_inst == nullptr) {
+    errs() << "configure_call not followed by kcall.configok\n";
     return nullptr;
   }
   // follow to "kcall.configok" block
-  BasicBlock *candidate = nullptr;
-  for (auto *successor : Br->successors()) {
+  BasicBlock* candidate = nullptr;
+  for (auto* successor : branch_inst->successors()) {
     if (successor->getName().startswith("kcall.configok")) {
       candidate = successor;
       break;
     }
   }
   if (candidate == nullptr) {
-    errs() << "configureCall not followed by kcall.configok\n";
+    errs() << "configure_call not followed by kcall.configok\n";
     return nullptr;
   }
   // find first block NOT followed by a "setup.next*" block
   while (true) {
-    Terminator = candidate->getTerminator();
-    Br = dyn_cast<BranchInst>(Terminator);
-    if (Br == nullptr) break;
-    BasicBlock *next = nullptr;
-    for (auto *successor : Br->successors()) {
+    terminator = candidate->getTerminator();
+    branch_inst = dyn_cast<BranchInst>(terminator);
+    if (branch_inst == nullptr) break;
+    BasicBlock* next = nullptr;
+    for (auto* successor : branch_inst->successors()) {
       if (successor->getName().startswith("setup.next")) {
         next = successor;
         break;
@@ -60,9 +58,9 @@ Instruction* findLaunchFor(CallInst* configureCall) {
   }
 
   Instruction* launch = nullptr;
-  for (auto it = candidate->rbegin(); it != candidate->rend(); ++it) {
-    if (isa<CallInst>(*it) || isa<InvokeInst>(*it)) {
-      launch = &(*it);
+  for (auto inst_cur = candidate->rbegin(); inst_cur != candidate->rend(); ++inst_cur) {
+    if (isa<CallInst>(*inst_cur) || isa<InvokeInst>(*inst_cur)) {
+      launch = &(*inst_cur);
       break;
     }
   }
@@ -75,19 +73,19 @@ Instruction* findLaunchFor(CallInst* configureCall) {
 
 std::string getKernelNameOf(Instruction* launch) {
   Function* callee = nullptr;
-  Value *op1 = nullptr;
-  CallInst *CI = dyn_cast<CallInst>(launch);
-  if (CI != nullptr) {
-    callee = CI->getCalledFunction();
-    if (CI->getNumArgOperands() > 0) {
-      op1 = CI->getArgOperand(0);
+  Value* op1 = nullptr;
+  CallInst* callinst = dyn_cast<CallInst>(launch);
+  if (callinst != nullptr) {
+    callee = callinst->getCalledFunction();
+    if (callinst->getNumArgOperands() > 0) {
+      op1 = callinst->getArgOperand(0);
     }
   } else {
-    InvokeInst *II = dyn_cast<InvokeInst>(launch);
-    if (II != nullptr) {
-      callee = II->getCalledFunction();
-      if (II->getNumArgOperands() > 0) {
-        op1 = II->getArgOperand(0);
+    InvokeInst* invokeinst = dyn_cast<InvokeInst>(launch);
+    if (invokeinst != nullptr) {
+      callee = invokeinst->getCalledFunction();
+      if (invokeinst->getNumArgOperands() > 0) {
+        op1 = invokeinst->getArgOperand(0);
       }
     } else {
       return "";
@@ -110,88 +108,9 @@ namespace llvm {
 
   LocateKCallsPass::LocateKCallsPass() : ModulePass(ID) {}
 
-  
-
-
-// Constant Definitions
-    //ConstantPointerNull* const_ptr_2 = ConstantPointerNull::get(Type::getInt8PtrTy(M.getContext()));
-    //ConstantPointerNull* const_ptr_2 = ConstantPointerNull::get(Constant::getNullValue(ArrayType::get(i8, 300)));
-
-// Global Variable Definitions
-    //gvar_ptr_abc->setInitializer(Constant::getNullValue(arty));
-    
-    //gvar_ptr_abc->setInitializer(ConstantAggregateZero::get(arty));
-
-    //gvar_ptr_abc->setInitializer(init);
-    
-    
-
-
-    /*
-      std::string* utf8string = new std::string("asdf");
-      Type *i8 = Type::getInt8Ty(M.getContext());
-      std::vector<llvm::Constant *> chars(utf8string->size()+1);
-      printf("%d\n", utf8string->size());
-      const char* curstr = utf8string->data();
-      printf("%s\n", curstr);
-      for(unsigned int i = 0; i < utf8string->size()+1; i++) {
-      chars[i] = ConstantInt::get(i8, curstr[i]);
-      //printf("%d\n", chars[i]));
-      }
-      printf("%d\n", chars.size());
-      Constant* init = ConstantArray::get(ArrayType::get(i8, chars.size()),
-      chars);
-
-      Constant* test = Constant::getNullValue(i8);
-    */
-    //ConstantDataArray cdatmp = new ConstantDataArray(Type::getInt8Ty(), curstr);
-    //printf("cdatmp: %s\n", cdatmp.getRawDataValues().data());
-    //printf("%s\n", init);
-
-    //GlobalVariable * v = getOrCreateGlobalVar(M, test->getType(), "ASDF");
-
-    /*
-    GlobalVariable *tmp = M.getNamedGlobal("ASDF");
-    if (tmp == nullptr || tmp->isNullValue())
-      printf("NULL\n");
-    */
-    
-    /*GlobalVariable *Global = M.getGlobalVariable("ASDF");
-    
-    if (Global->getInitializer()->isNullValue())
-      printf("NULL\n");
-    */
-    //Constant *zero = Constant::getNullValue(T)
-    /*
-    GlobalVariable *Global = new GlobalVariable(M, init->getType(), true, GlobalValue::LinkOnceAnyLinkage, init, "ASDF");
-    Global->setAlignment(8);
-    //Global->setInitializer(init);
-    assert(Global != nullptr);
-    */
-    //v->setInitializer(test);
-    /*GlobalVariable * v = 
-      new GlobalVariable(M, init->getType(), true,
-      GlobalVariable::ExternalLinkage, 0,
-      "ASDF");*/
-
-
-  
-    //Constant* tmp = M.getOrInsertGlobal("ASDF", init->getType());
-    //GlobalVariable* gVar = M.getNamedGlobal("ASDF");
-    //gVar->setAlignment(1);
-    //v->setInitializer(init);
-    //M.getOrInsertGlobal(v->getName(), v->getType());
-
-    //M.getOrInsertGloba
-    //return ConstantExpr::getBitCast(v, i8->getPointerTo());
-
-
-  
-  
-
-  bool LocateKCallsPass::runOnModule(Module &M) {
+  bool LocateKCallsPass::runOnModule(Module& module) {
     launches.clear();
-    for (auto *configure : findConfigureCalls(M)) {
+    for (auto* configure : findConfigureCalls(module)) {
       Instruction* launch = findLaunchFor(configure);
       std::string name = getKernelNameOf(launch);
       launches.push_back(KCall(configure, launch, name));
@@ -207,26 +126,13 @@ namespace llvm {
     return launches;
   }
 
-  void LocateKCallsPass::print(raw_ostream &O, const Module *M) const {
-    for (const auto &launch : launches) {
-      O << "\n";
-      O << "name:   " << launch.kernelName << "\n";
-      O << "config: " << *launch.configureCall << "\n";
-      if (launch.kernelLaunch != nullptr) {
-        O << "launch: " << *launch.kernelLaunch << "\n";
-      } else {
-        O << "launch: (nullptr)\n";
-      }
-    }
-  }
-
   char LocateKCallsPass::ID = 0;
 
-  Pass *createLocateKCallsPass() {
+  Pass* createLocateKCallsPass() {
     return new LocateKCallsPass();
   }
 
 }
 
 static RegisterPass<LocateKCallsPass>
-  X("memtrace-locate-kcalls", "locate kernel launches", false, false);
+  X("cuprof-locate-kcalls", "locate kernel launches", false, false);

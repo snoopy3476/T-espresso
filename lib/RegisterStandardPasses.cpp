@@ -1,51 +1,41 @@
 #include "Passes.h"
 
+#include <sstream>
+
 #include "llvm/PassRegistry.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/Transforms/IPO/PassManagerBuilder.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
+#include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/MemoryBuffer.h"
 
 #include "clang/Frontend/FrontendPluginRegistry.h"
+#include "clang/Frontend/CompilerInstance.h"
+#include "clang/Frontend/FrontendAction.h"
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/AST.h"
-#include "clang/Frontend/CompilerInstance.h"
-#include "llvm/Support/raw_ostream.h"
-
-#include <sstream>
-
-#include "llvm/Support/MemoryBuffer.h"
 
 
 using namespace llvm;
 
-static InstrumentPassArg pass_args;
+static InstrumentPassArg pass_args = {true, true};
 
+#ifndef CLANG_PASS_ONLY
 namespace clang {
   
-  static void registerStandardPasses(const PassManagerBuilder &, legacy::PassManagerBase &);
-  
-
-  class PluginEntry : public PluginASTAction {
-    
+  class CuprofPluginEntry : public PluginASTAction {
+    void anchor() override { }
   protected:
 
 
     // Register pass according to args
-    std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI,
-                                                   StringRef strref) override {
-
-      static RegisterStandardPasses RegisterTracePass(
-        PassManagerBuilder::EP_ModuleOptimizerEarly, registerStandardPasses);
-      static RegisterStandardPasses RegisterTracePass0(
-        PassManagerBuilder::EP_EnabledOnOptLevel0, registerStandardPasses);
-
+    std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance&, StringRef) override {
       return make_unique<ASTConsumer>();
-    
     }
 
     
     // Get args of the plugin
-    bool ParseArgs(const CompilerInstance &CI,
+    bool ParseArgs(const CompilerInstance&,
                    const std::vector<std::string>& args) override {
       
       pass_args.trace_thread = true;
@@ -66,7 +56,6 @@ namespace clang {
         }
         
         
-        //printf("%s, %s\n", optname.c_str(), optarg.c_str());
         
         if (optname == "thread-only") {
           //errs() << "cuprof: Tracing thread scheduling - Disabled\n";
@@ -78,11 +67,6 @@ namespace clang {
           //errs() << "cuprof: Tracing memory access - Disabled\n";
           pass_args.trace_thread = false;
           pass_args.trace_mem = true;
-
-          
-        } else if (optname == "no-trace") {
-          //errs() << "cuprof: Tracing - Disabled\n";
-          return false;
 
           
         } else if (optname == "kernel") {
@@ -136,14 +120,10 @@ namespace clang {
             }
           }
           
-
-
           
         } else {
           fprintf(stderr, "cuprof: unused argument: %s\n", optstr.c_str());
         }
-
-        
       }
 
 
@@ -154,26 +134,32 @@ namespace clang {
     ActionType getActionType() override {
       return ActionType::AddBeforeMainAction;
     }
+    
 
   private:
 
   };
 
-
-
-
   
-  static void registerStandardPasses(const PassManagerBuilder &, legacy::PassManagerBase &PM) {
-    
-    PM.add(createMarkAllDeviceForInlinePass());
-    PM.add(createAlwaysInlinerLegacyPass());
-    PM.add(createLinkDeviceSupportPass());
-    PM.add(createInstrumentDevicePass(pass_args));
-
-    PM.add(createInstrumentHostPass(pass_args));
-  }
-  
-  static FrontendPluginRegistry::Add<clang::PluginEntry>
+  static FrontendPluginRegistry::Add<CuprofPluginEntry>
   X("cuprof", "cuda profiler");
+  
 }
+#endif
+  
 
+
+static void registerStandardPasses(const PassManagerBuilder&, legacy::PassManagerBase& pm) {
+    
+  pm.add(createMarkAllDeviceForInlinePass());
+  pm.add(createAlwaysInlinerLegacyPass());
+  pm.add(createLinkDeviceSupportPass());
+  pm.add(createInstrumentDevicePass(pass_args));
+
+  pm.add(createInstrumentHostPass(pass_args));
+}
+  
+static RegisterStandardPasses RegisterTracePass(
+  PassManagerBuilder::EP_ModuleOptimizerEarly, registerStandardPasses);
+static RegisterStandardPasses RegisterTracePass0(
+  PassManagerBuilder::EP_EnabledOnOptLevel0, registerStandardPasses);

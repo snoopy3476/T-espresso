@@ -17,10 +17,10 @@ namespace llvm {
   };
 
   
-  Pass *createMarkAllDeviceForInlinePass();
-  Pass *createLinkDeviceSupportPass();
-  Pass *createInstrumentDevicePass(InstrumentPassArg);
+  Pass* createMarkAllDeviceForInlinePass();
+  Pass* createLinkDeviceSupportPass();
+  Pass* createInstrumentDevicePass(InstrumentPassArg);
 
-  Pass *createLinkHostSupportPass();
-  Pass *createInstrumentHostPass(InstrumentPassArg);
+  Pass* createLinkHostSupportPass();
+  Pass* createInstrumentHostPass(InstrumentPassArg);
 }

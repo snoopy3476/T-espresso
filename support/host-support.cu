@@ -1,5 +1,5 @@
 #include "../lib/Common.h"
-#include "../lib/cutrace_io.h"
+#include "../lib/TraceIO.h"
 
 #include <atomic>
 #include <string>
@@ -29,7 +29,7 @@
   } while(0)
 
 extern "C" {
-  static char * ___cuprof_accdat_var = NULL;
+  static char* ___cuprof_accdat_var = NULL;
   static uint64_t ___cuprof_accdat_varlen = 0;
 }
 
@@ -40,13 +40,13 @@ static const char* getexename() {
     return cmdline;
   }
 
-  FILE *f = fopen("/proc/self/cmdline", "r");
-  if (!f) {
+  FILE* file = fopen("/proc/self/cmdline", "r");
+  if (!file) {
     return NULL;
   }
   size_t n;
-  getdelim(&cmdline, &n, 0, f);
-  fclose(f);
+  getdelim(&cmdline, &n, 0, file);
+  fclose(file);
   cmdline = basename(cmdline);
   return cmdline;
 }
@@ -57,12 +57,12 @@ static const char* getexename() {
  */
 static std::string traceName(std::string id) {
   static const char* exename = getexename(); // initialize once
-  const char* pattern_env = getenv("MEMTRACE_PATTERN");
+  const char* pattern_env = getenv("CUPROF_TRACE_PATTERN");
   std::string pattern;
   if (pattern_env) {
     pattern = pattern_env;
   } else if (exename) {
-    pattern = "./" + std::string(exename) + "-?.trc";
+    pattern = "./trace-" + std::string(exename) + "-?.trc";
   } else {
     pattern = "./trace-?.trc";
   }
@@ -111,7 +111,7 @@ static std::string traceName(std::string id) {
 
 
 typedef struct kernel_trace_arg_t {
-  const char * kernel_name;
+  const char* kernel_name;
   uint16_t kernel_block_size;
 } kernel_trace_arg_t;
 
@@ -119,14 +119,13 @@ typedef struct trace_filter_arg_t {
   const uint8_t* sm;
   const uint64_t* cta;
   const uint32_t* warp;
-  const size_t* size;
+  size_t sm_size, cta_size, warp_size;
 } trace_filter_arg_t;
 
-//extern const char ___CUDATRACE_DEBUG_DATA[];
 
 class TraceConsumer {
 public:
-  static char * debugdata;
+  static char* debugdata;
   
   //TraceConsumer(std::string suffix, const char* header_info) {
   TraceConsumer(std::string suffix, trace_filter_arg_t trace_filter) {
@@ -138,25 +137,25 @@ public:
     this->suffix = suffix;
     TraceConsumer::trace_filter = trace_filter;
 
-    cudaChecked(cudaHostAlloc(&RecordsHost, SLOTS_NUM * SLOTS_SIZE * RECORD_SIZE, cudaHostAllocMapped));
-    cudaChecked(cudaHostGetDevicePointer(&RecordsDevice, RecordsHost, 0));
+    cudaChecked(cudaHostAlloc(&records_host, SLOTS_NUM * SLOTS_SIZE * RECORD_SIZE, cudaHostAllocMapped));
+    cudaChecked(cudaHostGetDevicePointer(&records_device, records_host, 0));
 
-    cudaChecked(cudaHostAlloc(&AllocsHost, SLOTS_NUM * CACHELINE, cudaHostAllocMapped));
-    cudaChecked(cudaHostGetDevicePointer(&AllocsDevice, AllocsHost, 0));
-    memset(AllocsHost, 0, SLOTS_NUM * CACHELINE);
+    cudaChecked(cudaHostAlloc(&allocs_host, SLOTS_NUM * CACHELINE, cudaHostAllocMapped));
+    cudaChecked(cudaHostGetDevicePointer(&allocs_device, allocs_host, 0));
+    memset(allocs_host, 0, SLOTS_NUM * CACHELINE);
 
-    cudaChecked(cudaHostAlloc(&CommitsHost, SLOTS_NUM * CACHELINE, cudaHostAllocMapped));
-    cudaChecked(cudaHostGetDevicePointer(&CommitsDevice, CommitsHost, 0));
-    memset(CommitsHost, 0, SLOTS_NUM * CACHELINE);
+    cudaChecked(cudaHostAlloc(&commits_host, SLOTS_NUM * CACHELINE, cudaHostAllocMapped));
+    cudaChecked(cudaHostGetDevicePointer(&commits_device, commits_host, 0));
+    memset(commits_host, 0, SLOTS_NUM * CACHELINE);
 
-    shouldRun = false;
-    doesRun = false;
+    should_run = false;
+    does_run = false;
 
-    pipeName = traceName(suffix);
+    pipe_name = traceName(suffix);
 
-    output = fopen(this->pipeName.c_str(), "wb");
+    output = fopen(this->pipe_name.c_str(), "wb");
     if (output == nullptr) {
-      printf("unable to open trace file '%s' for writing\n", pipeName.c_str());
+      printf("unable to open trace file '%s' for writing\n", pipe_name.c_str());
       abort();
     }
 
@@ -164,64 +163,64 @@ public:
   }
 
   virtual ~TraceConsumer() {
-    always_assert(!shouldRun);
+    always_assert(!should_run);
     fclose(output);
 
-    cudaFreeHost(RecordsHost);
-    cudaFreeHost(AllocsHost);
-    cudaFreeHost(CommitsHost);
+    cudaFreeHost(records_host);
+    cudaFreeHost(allocs_host);
+    cudaFreeHost(commits_host);
   }
 
-  void start(const char *name, uint16_t block_size) {
-    always_assert(!shouldRun);
-    shouldRun = true;
+  void start(const char* name, uint16_t block_size) {
+    always_assert(!should_run);
+    should_run = true;
 
     // reset all buffers and pointers
-    memset(AllocsHost, 0, SLOTS_NUM * CACHELINE);
-    memset(CommitsHost, 0, SLOTS_NUM * CACHELINE);
+    memset(allocs_host, 0, SLOTS_NUM * CACHELINE);
+    memset(commits_host, 0, SLOTS_NUM * CACHELINE);
     // just for testing purposes
-    memset(RecordsHost, 0, SLOTS_NUM * SLOTS_SIZE * RECORD_SIZE);
+    memset(records_host, 0, SLOTS_NUM * SLOTS_SIZE * RECORD_SIZE);
 
     trace_write_kernel(output, name, block_size);
 
-    workerThread = std::thread(consume, this);
+    worker_thread = std::thread(consume, this);
 
-    while (!doesRun) {}
+    while (!does_run) {}
   }
 
   void stop() {
-    always_assert(shouldRun);
-    shouldRun = false;
-    while (doesRun) {}
-    workerThread.join();
+    always_assert(should_run);
+    should_run = false;
+    while (does_run) {}
+    worker_thread.join();
   }
 
-  void fillTraceinfo(traceinfo_t *info) {
-    info->allocs = AllocsDevice;
-    info->commits = CommitsDevice;
-    info->records = RecordsDevice;
+  void fillTraceinfo(traceinfo_t* info) {
+    info->allocs = allocs_device;
+    info->commits = commits_device;
+    info->records = records_device;
     info->slot_size = SLOTS_SIZE;
   }
 
 protected:
 
   static uint64_t rdtsc(){
-    unsigned int lo,hi;
+    unsigned int lo, hi;
     __asm__ __volatile__ ("rdtsc" : "=a" (lo), "=d" (hi));
     return ((uint64_t)hi << 32) | lo;
   }
 
   // clear up a slot if it is full
-  static int consumeSlot(uint8_t *allocPtr, uint8_t *commitPtr, uint8_t *recordsPtr,
-                         FILE* out, bool kernelActive, trace_record_t *acc) {
+  static int consumeSlot(uint8_t* alloc_ptr, uint8_t* commit_ptr, uint8_t* records_ptr,
+                         FILE* out, bool is_kernel_active, trace_record_t* acc) {
     // allocs/commits is written by threads on the GPU, so we need it volatile
-    volatile uint32_t *vcommit = (uint32_t*)commitPtr;
-    volatile uint32_t *valloc = (uint32_t*)allocPtr;
+    volatile uint32_t* vcommit = (uint32_t*)commit_ptr;
+    volatile uint32_t* valloc = (uint32_t*)alloc_ptr;
 
     
     // if kernel is still active we only want to read full slots
-    uint32_t numRecords = *vcommit;
-    if (kernelActive && !(numRecords > SLOTS_SIZE - 32)) {
+    uint32_t records_count = *vcommit;
+    if (is_kernel_active && !(records_count > SLOTS_SIZE - 32)) {
       return 1;
     }
 
@@ -231,26 +230,26 @@ protected:
     // mode = 2 : increment addresses
     //            (before_addr + before_size * before_count = cur_addr)
     int compression_mode;
-    char newrecOrig[TRACE_RECORD_SIZE(32)] = {0};
-    trace_record_t *const newrec = (trace_record_t *const) newrecOrig;
+    char newrec_orig[TRACE_RECORD_SIZE(32)] = {0};
+    trace_record_t* const newrec = (trace_record_t* const) newrec_orig;
 
     
-    trace_record_addr_t *acc_addr;
+    trace_record_addr_t* acc_addr;
     // we know writing from the gpu stopped, so we avoid using the volatile
     // reference in the end condition
-    for (int32_t i = 0; i < numRecords; ++i) {
+    for (int32_t i = 0; i < records_count; ++i) {
 
-      __trace_unpack((record_t *)&recordsPtr[i * RECORD_SIZE], newrec);
+      trace_deserialize((record_t*)&records_ptr[i * RECORD_SIZE], newrec);
 
 
-      // filter
+      // trace filter
       
       bool to_be_traced = true;
       
-      if (trace_filter.size[0] > 0) {
+      if (trace_filter.sm_size > 0) {
         
         bool is_found = false;
-        for (int i = 0; i < trace_filter.size[0]; i++)
+        for (int i = 0; i < trace_filter.sm_size; i++)
           if (trace_filter.sm[i] == newrec->smid)
             is_found = true;
         
@@ -258,24 +257,24 @@ protected:
           to_be_traced = false;
       }
       
-      if (trace_filter.size[1] > 0) {
+      if (trace_filter.cta_size > 0) {
         
         bool is_found = false;
-        for (int i = 0; i < trace_filter.size[1]; i++)
+        for (int i = 0; i < trace_filter.cta_size; i++)
           if ( trace_filter.cta[i] ==
-              ((((uint64_t)newrec->ctaid.x) << 32) |
-              (((uint64_t)newrec->ctaid.y & 0xFFFF) << 16) |
-               ((uint64_t)newrec->ctaid.z & 0xFFFF)) )
+               ((((uint64_t)newrec->ctaid.x) << 32) |
+                (((uint64_t)newrec->ctaid.y & 0xFFFF) << 16) |
+                ((uint64_t)newrec->ctaid.z & 0xFFFF)) )
             is_found = true;
         
         if (!is_found)
           to_be_traced = false;
       }
       
-      if (trace_filter.size[2] > 0) {
+      if (trace_filter.warp_size > 0) {
         
         bool is_found = false;
-        for (int i = 0; i < trace_filter.size[2]; i++)
+        for (int i = 0; i < trace_filter.warp_size; i++)
           if (trace_filter.warp[i] == newrec->warp)
             is_found = true;
         
@@ -300,6 +299,7 @@ protected:
 	compression_mode = 0;
       }
 
+      
       // otherwise see if we can increment or have to flush
       else {
 
@@ -362,64 +362,63 @@ protected:
   }
 
   // payload function of queue consumer
-  static void consume(TraceConsumer *obj) {
-    obj->doesRun = true;
+  static void consume(TraceConsumer* obj) {
+    obj->does_run = true;
     
-    char recordAccOrig[TRACE_RECORD_SIZE(32)] = {0};
-    trace_record_t *const recordAcc = (trace_record_t *const) recordAccOrig;
-    // recordAcc->addr_len == 0 -> uninitialized
+    char record_acc_orig[TRACE_RECORD_SIZE(32)] = {0};
+    trace_record_t* const record_acc = (trace_record_t* const) record_acc_orig;
+    // record_acc->addr_len == 0 -> uninitialized
 
-    uint8_t *allocs = obj->AllocsHost;
-    uint8_t *commits = obj->CommitsHost;
-    uint8_t *records = obj->RecordsHost;
+    uint8_t* allocs = obj->allocs_host;
+    uint8_t* commits = obj->commits_host;
+    uint8_t* records = obj->records_host;
 
     FILE* sink = obj->output;
 
 
-    while(obj->shouldRun) {
+    while(obj->should_run) {
       for(int slot = 0; slot < SLOTS_NUM; slot++) {
         uint32_t allocs_offset = slot * CACHELINE;
         uint32_t commits_offset = slot * CACHELINE;
         uint32_t records_offset = slot * SLOTS_SIZE * RECORD_SIZE;
         consumeSlot(&allocs[allocs_offset], &commits[commits_offset],
-                    &records[records_offset], sink, true, recordAcc);
+                    &records[records_offset], sink, true, record_acc);
       }
     }
 
-    // after shouldRun flag has been reset to false, no warps are writing, but
+    // after should_run flag has been reset to false, no warps are writing, but
     // there might still be data in the buffers
     for(int slot = 0; slot < SLOTS_NUM; slot++) {
       uint32_t allocs_offset = slot * CACHELINE;
       uint32_t commits_offset = slot * CACHELINE;
       uint32_t records_offset = slot * SLOTS_SIZE * RECORD_SIZE;
       consumeSlot(&allocs[allocs_offset], &commits[commits_offset],
-                  &records[records_offset], sink, false, recordAcc);
+                  &records[records_offset], sink, false, record_acc);
     }
 
     // flush accumulator and reset to uninitialized (if at all initialized)
-    if (recordAcc->addr_len > 0) {
-      trace_write_record(sink, recordAcc);
-      recordAcc->addr_len = 0;
+    if (record_acc->addr_len > 0) {
+      trace_write_record(sink, record_acc);
+      record_acc->addr_len = 0;
     }
 
-    obj->doesRun = false;
+    obj->does_run = false;
     return;
   }
 
   std::string suffix;
   static trace_filter_arg_t trace_filter;
 
-  std::atomic<bool> shouldRun;
-  std::atomic<bool> doesRun;
-  //trace_record_t recordAcc; // recordAccumulator for compression
+  std::atomic<bool> should_run;
+  std::atomic<bool> does_run;
 
-  FILE *output;
-  std::thread       workerThread;
-  std::string       pipeName;
+  FILE* output;
+  std::thread       worker_thread;
+  std::string       pipe_name;
 
-  uint8_t *AllocsHost, *AllocsDevice;
-  uint8_t *CommitsHost, *CommitsDevice;
-  uint8_t *RecordsHost, *RecordsDevice;
+  uint8_t* allocs_host, * allocs_device;
+  uint8_t* commits_host, * commits_device;
+  uint8_t* records_host, * records_device;
 };
 trace_filter_arg_t TraceConsumer::trace_filter;
 
@@ -436,27 +435,27 @@ public:
    */
   //bool touchConsumer(cudaStream_t stream, const char* header_info) {
   bool touchConsumer(cudaStream_t stream, trace_filter_arg_t trace_filter) {
-    for (auto &consumerPair : consumers) {
-      if (consumerPair.first == stream) {
+    for (auto &consumer_pair : consumers) {
+      if (consumer_pair.first == stream) {
         return false;
       }
     }
 
-    char *suffix;
+    char* suffix;
     asprintf(&suffix, "%d", (int)consumers.size());
-    auto newPair = std::make_pair(stream, new TraceConsumer(suffix, trace_filter));
+    auto new_pair = std::make_pair(stream, new TraceConsumer(suffix, trace_filter));
     free(suffix);
-    consumers.push_back(newPair);
+    consumers.push_back(new_pair);
     return true;
   }
 
   /** Return *already initialized* TraceConsumer for a stream. Aborts application
    * if stream is not initialized.
    */
-  TraceConsumer *getConsumer(cudaStream_t stream) {
-    for (auto &consumerPair : consumers) {
-      if (consumerPair.first == stream) {
-        return consumerPair.second;
+  TraceConsumer* getConsumer(cudaStream_t stream) {
+    for (auto &consumer_pair : consumers) {
+      if (consumer_pair.first == stream) {
+        return consumer_pair.second;
       }
     }
     always_assert(0 && "trying to get non-existent consumer");
@@ -464,14 +463,14 @@ public:
   }
 
   virtual ~TraceManager() {
-    for (auto &consumerPair : consumers) {
-      delete consumerPair.second;
+    for (auto &consumer_pair : consumers) {
+      delete consumer_pair.second;
     }
   }
 private:
   std::vector<std::pair<cudaStream_t, TraceConsumer*>> consumers;
 };
-char * TraceConsumer::debugdata = nullptr;
+char* TraceConsumer::debugdata = nullptr;
 
 TraceManager __trace_manager;
 
@@ -483,7 +482,7 @@ extern "C" {
   
   void ___cuprof_accdat_ctor() {
     if (!___cuprof_accdat_var) {
-      ___cuprof_accdat_var = (char *) malloc(sizeof(char));
+      ___cuprof_accdat_var = (char*) malloc(sizeof(char));
     }
   }
   
@@ -494,9 +493,9 @@ extern "C" {
     }
   }
 
-  void ___cuprof_accdat_append(const char * data, uint64_t data_len) {
-    char * var_tmp = (char *) realloc(___cuprof_accdat_var,
-                                      ___cuprof_accdat_varlen + data_len + 1);
+  void ___cuprof_accdat_append(const char* data, uint64_t data_len) {
+    char* var_tmp = (char*) realloc(___cuprof_accdat_var,
+                                    ___cuprof_accdat_varlen + data_len + 1);
     if (!var_tmp) {
       fprintf(stderr, "cuprof: Failed to initialize memory access data!\n");
       abort();
@@ -509,50 +508,50 @@ extern "C" {
     ___cuprof_accdat_varlen += data_len;
   }
 
+
   
-  void __trace_fill_info(const void *info, cudaStream_t stream) {
-    auto *consumer = __trace_manager.getConsumer(stream);
+  static void __trace_start_callback(cudaStream_t stream, cudaError_t status, void* vargs) {
+    auto* consumer = __trace_manager.getConsumer(stream);
+    kernel_trace_arg_t* vargs_cast = (kernel_trace_arg_t*)vargs;
+    consumer->start(vargs_cast->kernel_name, vargs_cast->kernel_block_size);
+    free(vargs_cast);
+  }
+
+  static void __trace_stop_callback(cudaStream_t stream, cudaError_t status, void* vargs) {
+    auto* consumer = __trace_manager.getConsumer(stream);
+    consumer->stop();
+  }
+
+  
+  
+  void __trace_fill_info(const void* info, cudaStream_t stream) {
+    auto* consumer = __trace_manager.getConsumer(stream);
     consumer->fillTraceinfo((traceinfo_t*) info);
   }
 
-  void __trace_copy_to_symbol(cudaStream_t stream, const void* symbol, const void *info) {
-    //printf("cudaMemcpyToSymbol(%p, %p, %zu, 0, cudaMemcpyHostToDevice)\n", symbol, info, sizeof(traceinfo_t));
+  void __trace_copy_to_symbol(cudaStream_t stream, const void* symbol, const void* info) {
     cudaChecked(cudaMemcpyToSymbolAsync(symbol, info, sizeof(traceinfo_t), 0, cudaMemcpyHostToDevice, stream));
   }
 
-  static void __trace_start_callback(cudaStream_t stream, cudaError_t status, void *vargs);
-  static void __trace_stop_callback(cudaStream_t stream, cudaError_t status, void *vargs);
-
-  //void __trace_touch(cudaStream_t stream, const char *header_info) {
-  void __trace_touch(cudaStream_t stream, uint8_t* sm_filter, uint64_t* cta_filter,
-                     uint32_t* warp_filter, size_t* filter_size) {
-/*
-    printf("%p, %p, %p, %p\n", sm_filter, cta_filter, warp_filter, filter_size);
+  void __trace_touch(cudaStream_t stream,
+                     uint8_t* sm_filter, uint64_t* cta_filter, uint32_t* warp_filter,
+                     size_t sm_filter_size, size_t cta_filter_size, size_t warp_filter_size) {
     
-    for (int i = 0; i < filter_size[0]; i++) {
-      printf("%u/", sm_filter[i]);
-    }
-    putchar('\n');
+    trace_filter_arg_t filter = {
+      sm_filter, cta_filter, warp_filter,
+      sm_filter_size, cta_filter_size, warp_filter_size
+    };
     
-    for (int i = 0; i < filter_size[1]; i++) {
-      printf("%lu/", cta_filter[i]);
-    }
-    putchar('\n');
-    
-    for (int i = 0; i < filter_size[2]; i++) {
-      printf("%u/", warp_filter[i]);
-    }
-    putchar('\n');
-*/
-    __trace_manager.touchConsumer(stream, (trace_filter_arg_t){sm_filter, cta_filter, warp_filter, filter_size});
+    __trace_manager.touchConsumer(stream, filter);
   }
 
-  void __trace_start(cudaStream_t stream, const char *kernel_name, uint16_t block_size) {
-    kernel_trace_arg_t *arg = (kernel_trace_arg_t *) malloc(sizeof(kernel_trace_arg_t));
+  void __trace_start(cudaStream_t stream, const char* kernel_name, uint16_t block_size) {
+    kernel_trace_arg_t* arg = (kernel_trace_arg_t*) malloc(sizeof(kernel_trace_arg_t));
     if (arg == nullptr) {
       printf("unable to allocate memory\n");
       abort();
     }
+    
     *arg = (kernel_trace_arg_t){kernel_name, block_size};
     cudaChecked(cudaStreamAddCallback(stream,
                                       __trace_start_callback, (void*)arg, 0));
@@ -567,16 +566,5 @@ extern "C" {
  * private parts of implementation
  */
 
-  static void __trace_start_callback(cudaStream_t stream, cudaError_t status, void *vargs) {
-    auto *consumer = __trace_manager.getConsumer(stream);
-    kernel_trace_arg_t *vargs_cast = (kernel_trace_arg_t *)vargs;
-    consumer->start(vargs_cast->kernel_name, vargs_cast->kernel_block_size);
-    free(vargs_cast);
-  }
-
-  static void __trace_stop_callback(cudaStream_t stream, cudaError_t status, void *vargs) {
-    auto *consumer = __trace_manager.getConsumer(stream);
-    consumer->stop();
-  }
 
 }

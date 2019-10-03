@@ -18,7 +18,7 @@
  **/
 
 
-#include "../lib/cutrace_io.h"
+#include "../lib/TraceIO.h"
 
 #ifndef __STDC_FORMAT_MACROS
 #define __STDC_FORMAT_MACROS
@@ -53,7 +53,7 @@ void usage(const char* program_name) {
 }
 
 int main(int argc, char** argv) {
-  FILE *input;
+  FILE* input;
 
   switch (argc) {
   case 2: {
@@ -75,7 +75,7 @@ int main(int argc, char** argv) {
   
   int quiet = getenv("QUIET") != NULL;
 
-  trace_t *trace = trace_open(input);
+  trace_t* trace = trace_open(input);
 
   if (trace == NULL) {
     die("%s", trace_last_error);
@@ -83,7 +83,7 @@ int main(int argc, char** argv) {
 
   uint16_t block_size = 0;
 
-  trace_header_kernel_t * kernel_info;  
+  trace_header_kernel_t* kernel_info;  
   while (trace_next(trace) == 0) {
 
     if (trace->new_kernel) {
@@ -91,7 +91,7 @@ int main(int argc, char** argv) {
       printf("K %s\n", kernel_info->kernel_name);
       block_size = trace->block_size;
     } else {
-      trace_record_t *r = &trace->record;
+      trace_record_t* r = &trace->record;
       if (quiet) {
         continue;
       }
@@ -126,13 +126,13 @@ int main(int argc, char** argv) {
 
       // print mem access info
       if (trace_type == 'M') {
-        trace_header_inst_t * inst_info = kernel_info->inst_by_id[r->instid];
+        trace_header_inst_t* inst_info = &kernel_info->insts[r->instid];
 
         // size
         printf(" %" PRIu32, r->size);
         
         for (uint8_t i = 0; i < r->addr_len; i++) {
-          trace_record_addr_t *acc_addr = &r->addr_unit[i];
+          trace_record_addr_t* acc_addr = &r->addr_unit[i];
           int64_t increment = acc_addr->offset;
           int8_t count = acc_addr->count;
           int8_t j;

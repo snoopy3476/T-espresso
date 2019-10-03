@@ -1,6 +1,6 @@
 set(LLVM_NO_RTTI 1)
 
-add_llvm_library(LLVMCUDAProf MODULE
+add_llvm_library(libcuprof MODULE
   MarkAllDeviceForInline.cpp
   LinkDeviceSupport.cpp
   InstrumentDevice.cpp
@@ -10,15 +10,15 @@ add_llvm_library(LLVMCUDAProf MODULE
 
   RegisterStandardPasses.cpp
   )
-add_dependencies(LLVMCUDAProf
-  memtrace-device-utils
-  libmemtrace-host-o
+add_dependencies(libcuprof
+  cuprofdevice
+  cuprofhost
   )
 
 if (LLVM_LINK_LLVM_DYLIB)
-  target_link_libraries(LLVMCUDAProf PUBLIC LLVM)
+  target_link_libraries(libcuprof PUBLIC LLVM)
 else ()
-  target_link_libraries(LLVMCUDAProf PUBLIC
+  target_link_libraries(libcuprof PUBLIC
     LLVMSupport
     LLVMCore
     LLVMScalarOpts
@@ -41,5 +41,5 @@ else ()
     )
 endif()
 
-install(FILES ${MEMTRACE_SOURCE_DIR}/lib/cutrace_io.h
+install(FILES ${CUPROF_SOURCE_DIR}/lib/TraceIO.h
   DESTINATION include)

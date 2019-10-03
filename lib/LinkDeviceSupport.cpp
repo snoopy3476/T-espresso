@@ -7,9 +7,9 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/MemoryBuffer.h"
 
-#include "memtrace-device-utils.h"
+#include "cuprofdevice.h"
 
-#define DEBUG_TYPE "memtrace-link-device-support"
+#define DEBUG_TYPE "cuprof-link-device-support"
 
 using namespace llvm;
 
@@ -17,22 +17,22 @@ struct LinkDeviceSupportPass : public ModulePass {
   static char ID;
   LinkDeviceSupportPass() : ModulePass(ID) {}
 
-  bool runOnModule(Module &M) override {
-    bool isCUDA = M.getTargetTriple().find("nvptx") != std::string::npos;
-    if (!isCUDA) return false;
+  bool runOnModule(Module& module) override {
+    bool is_cuda = module.getTargetTriple().find("nvptx") != std::string::npos;
+    if (!is_cuda) return false;
 
-    SMDiagnostic Err;
-    LLVMContext &ctx = M.getContext();
+    SMDiagnostic err;
+    LLVMContext& ctx = module.getContext();
 
     StringRef source = StringRef((const char*)device_utils, sizeof(device_utils));
     auto buf = MemoryBuffer::getMemBuffer(source, "source", false);
 
-    auto utilModule = llvm::parseIR(buf->getMemBufferRef(), Err, ctx);
-    if (utilModule.get() == nullptr) {
-      errs() << "error: " << Err.getMessage() << "\n";
+    auto util_module = parseIR(buf->getMemBufferRef(), err, ctx);
+    if (util_module.get() == nullptr) {
+      errs() << "error: " << err.getMessage() << "\n";
       report_fatal_error("unable to parse");
     }
-    Linker::linkModules(M, std::move(utilModule));
+    Linker::linkModules(module, std::move(util_module));
 
     return true;
   }
@@ -40,9 +40,9 @@ struct LinkDeviceSupportPass : public ModulePass {
 char LinkDeviceSupportPass::ID = 0;
 
 namespace llvm {
-  Pass *createLinkDeviceSupportPass() {
+  Pass* createLinkDeviceSupportPass() {
     return new LinkDeviceSupportPass();
   }
 }
 
-static RegisterPass<LinkDeviceSupportPass> X("memtrace-link-device-support", "links device support functions into module", false, false);
+static RegisterPass<LinkDeviceSupportPass> X("cuprof-link-device-support", "links device support functions into module", false, false);

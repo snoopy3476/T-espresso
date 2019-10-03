@@ -1,0 +1,103 @@
+#!/bin/bash
+
+#
+# link cuda-related libs and apply cuprof automatically
+#
+# ex) clang++-trace source.cu -o binary
+#
+
+CUDA_DIR=/usr/local/cuda
+CUPROF_DIR= #/path/to/llvm/build/dir/root
+
+CUPROF_PLUGIN=libcuprof.so
+
+
+# init #
+
+if [ $# -eq 0 ]
+then
+    ${CUPROF_DIR}/bin/clang++
+    exit 1
+fi
+
+
+if ! [ -z $CUDA_DIR ]
+then
+    OPT_CUDA_DIR=--cuda-path=\"$CUDA_DIR\"
+else
+    CUDA_DIR=/usr/local/cuda
+fi
+
+
+if ! [ -z $CUPROF_DIR ]
+then
+    CUPROF_BIN=$CUPROF_DIR/bin/
+    CUPROF_LIB=$CUPROF_DIR/lib
+    CUPROF_PLUGIN=$CUPROF_LIB/$CUPROF_PLUGIN
+    OPT_LINK_CUPROF="-lcuprofhost"
+fi
+
+
+OPT_LINK="-L\"$CUDA_DIR/lib64\" -lcudart -lpthread $OPT_LINK_CUPROF"
+OPT_COMMON="-g"
+OPT_CUDA_GPU_ARCH="--cuda-gpu-arch=sm_50"
+OPT_OPTIMIZE="-O1"
+
+
+# process options #
+
+for arg in $@
+do
+    # arg starts with '-'
+    if [ "`echo "$arg" | cut -c1`" = "-" ]
+    then
+
+        # arg starts with "--"
+        if [ "`echo "$arg" | cut -c2`" = "-" ]
+        then
+            opt="`echo "$arg" | cut -d'=' -f2`"
+            arg="`echo "$arg" | cut -d'=' -f1`"
+
+
+            # check "--cuda-gpu-arch" option exists
+            if [ "$arg" = "--cuda-gpu-arch" ]
+            then
+                OPT_CUDA_GPU_ARCH=
+            fi
+
+
+
+        # arg not starts with "--"
+        else
+            # check "-c" option exists
+            if [ "$arg" = "-c" ]
+            then
+                OPT_LINK=
+
+            # check "-O" option exists
+            elif [ "`echo "$arg" | cut -c2`" = "O" ]
+            then
+                OPT_OPTIMIZE=
+            fi
+        fi
+    fi
+done
+
+
+
+
+# compile / link #
+
+EXE_CMD_ENV="LD_LIBRARY_PATH=\"$CUPROF_LIB:\$LD_LIBRARY_PATH\""
+EXE_CMD="${CUPROF_BIN}clang++ $OPT_CUDA_GPU_ARCH $OPT_OPTIMIZE $OPT_CUDA_DIR $@ $OPT_LINK -fplugin=libcuprof.so $OPT_COMMON"
+
+# print cmdline - comment out OPT_VERBOSE below to prevent verbose
+OPT_VERBOSE=enable
+if [ ! -z $OPT_VERBOSE ]
+then    
+    echo -e "\e[33m"$EXE_CMD_ENV \\\\\\n$EXE_CMD"\e[39m "
+fi
+
+
+# exec cmdline
+eval "$EXE_CMD_ENV" "$EXE_CMD"

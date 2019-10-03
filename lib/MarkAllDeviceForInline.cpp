@@ -2,7 +2,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/Support/raw_ostream.h"
 
-#define DEBUG_TYPE "memtrace-mark-device-for-inline"
+#define DEBUG_TYPE "cuprof-mark-device-for-inline"
 
 using namespace llvm;
 
@@ -10,15 +10,15 @@ struct MarkAllDeviceForInlinePass : public ModulePass {
   static char ID;
   MarkAllDeviceForInlinePass() : ModulePass(ID) {}
 
-  bool runOnModule(Module &M) override {
-    bool isCUDA = M.getTargetTriple().find("nvptx") != std::string::npos;
-    if (!isCUDA) return false;
+  bool runOnModule(Module& module) override {
+    bool is_cuda = module.getTargetTriple().find("nvptx") != std::string::npos;
+    if (!is_cuda) return false;
 
-    for (Function &F : M) {
-      if (F.isIntrinsic()) continue;
-      F.removeFnAttr(Attribute::AttrKind::OptimizeNone);
-      F.removeFnAttr(Attribute::AttrKind::NoInline);
-      F.addFnAttr(Attribute::AttrKind::AlwaysInline);
+    for (Function& func : module) {
+      if (func.isIntrinsic()) continue;
+      func.removeFnAttr(Attribute::AttrKind::OptimizeNone);
+      func.removeFnAttr(Attribute::AttrKind::NoInline);
+      func.addFnAttr(Attribute::AttrKind::AlwaysInline);
     }
 
     return true;
@@ -27,9 +27,9 @@ struct MarkAllDeviceForInlinePass : public ModulePass {
 char MarkAllDeviceForInlinePass::ID = 0;
 
 namespace llvm {
-  Pass *createMarkAllDeviceForInlinePass() {
+  Pass* createMarkAllDeviceForInlinePass() {
     return new MarkAllDeviceForInlinePass();
   }
 }
 
-static RegisterPass<MarkAllDeviceForInlinePass> X("memtrace-mark-inline", "marks all functions for inlining", false, false);
+static RegisterPass<MarkAllDeviceForInlinePass> X("cuprof-mark-inline", "marks all functions for inlining", false, false);
