@@ -562,9 +562,4 @@ extern "C" {
                                       __trace_stop_callback, (void*)nullptr, 0));
   }
 
-/***********************************************************
- * private parts of implementation
- */
-
-
 }

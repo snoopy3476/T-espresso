@@ -7,7 +7,7 @@
 using namespace llvm;
 
 SmallVector<CallInst*, 4> findConfigureCalls(Module& module) {
-  Function* func = module.getFunction("cudaConfigureCall");
+  Function* func = module.getFunction("__cudaPushCallConfiguration");
   if (func == nullptr) {
     return {};
   }
@@ -91,7 +91,7 @@ std::string getKernelNameOf(Instruction* launch) {
       return "";
     }
   }
-  if (callee->hasName() && callee->getName() != "cudaLaunch") {
+  if (callee->hasName() && callee->getName() != "cudaLaunchKernel") {
     return callee->getName();
   } else {
     op1 = op1->stripPointerCasts();

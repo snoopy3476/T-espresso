@@ -39,10 +39,7 @@ using namespace llvm;
  * Various helper functions
  */
 
-// Prototype
-// __device__ void __mem_trace (uint8_t* records, uint8_t* allocs,
-//  uint8_t* commits, uint64_t desc, uint64_t addr, uint32_t slot) {
-Constant* getOrInsertTraceDecl(Module& module) {
+FunctionCallee getOrInsertTraceDecl(Module& module) {
   LLVMContext& ctx = module.getContext();
 
   Type* void_ty = Type::getVoidTy(ctx);
@@ -53,17 +50,6 @@ Constant* getOrInsertTraceDecl(Module& module) {
   return module.getOrInsertFunction("___cuprof_trace", void_ty,
 			       i8p_ty, i8p_ty, i8p_ty,
                                i64_ty, i64_ty, i64_ty, i32_ty, i32_ty);
-}
-
-Constant* getOrInsertSetDebugDataDecl(Module& module) {
-  LLVMContext& ctx = module.getContext();
-
-  Type* void_ty = Type::getVoidTy(ctx);
-  Type* i8p_ty = Type::getInt8PtrTy(ctx);
-  Type* i64_ty = Type::getInt64Ty(ctx);
-
-  return module.getOrInsertFunction("___cuprof_set_accdat", void_ty,
-			       i8p_ty, i64_ty);
 }
 
 std::vector<Function*> getKernelFunctions(Module& module) {
@@ -371,8 +357,8 @@ struct InstrumentDevicePass : public ModulePass {
                         TraceInfoValues* info) {
     Module& module = *func->getParent();
 
-    Constant* trace_call = getOrInsertTraceDecl(module);
-    if (!trace_call) {
+    FunctionCallee trace_call = getOrInsertTraceDecl(module);
+    if (!trace_call.getCallee()) {
       report_fatal_error("No ___cuprof_trace declaration found");
     }
 
@@ -456,8 +442,8 @@ struct InstrumentDevicePass : public ModulePass {
     Module& module = *func->getParent();
 
     
-    Constant* trace_call = getOrInsertTraceDecl(module);
-    if (!trace_call) {
+    FunctionCallee trace_call = getOrInsertTraceDecl(module);
+    if (!trace_call.getCallee()) {
       report_fatal_error("No ___cuprof_trace declaration found");
     }
     
@@ -550,7 +536,7 @@ struct InstrumentDevicePass : public ModulePass {
 
   
   bool runOnModule(Module& module) override {
-    
+
     bool is_cuda = module.getTargetTriple().find("nvptx") != std::string::npos;
     if (!is_cuda) return false;
 
@@ -597,7 +583,7 @@ struct InstrumentDevicePass : public ModulePass {
       if (args.trace_mem) {
         instrumentMemAccess(kernel, accesses, &info);
       }
-      setDebugData(module, debugdata, kernel_name_sym); //////////////////////
+      setDebugData(module, debugdata, kernel_name_sym);
 
       if (args.trace_thread) {
         instrumentScheduling(kernel, ipfront, retinsts, &info);

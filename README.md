@@ -4,9 +4,10 @@ This llvm plugin is developed based on [CUDA Memtrace](https://github.com/UniHD-
 The plugin instruments CUDA code such that tracing ① all executes/returns (lifetimes) of every thread and ② all memory accesses to global memory by a kernel, on a per-stream basis.
 Traces are stored in a simple run-length encoded binary format, for which we provide an io utils in a header only library.
 
+
 # Usage
 ## Required arguments
-In order to add tracing to your CUDA application, you can compile CUDA applications using clang as described in the [official manual](https://releases.llvm.org/8.0.1/docs/CompileCudaWithLLVM.html) and two additional arguments (using at least `-O1` might be necessary for some applications).
+In order to add tracing to your CUDA application, you can compile CUDA applications using clang as described in the [official manual](https://releases.llvm.org/9.0.0/docs/CompileCudaWithLLVM.html) and two additional arguments (using at least `-O1` might be necessary for some applications).
 Let `$BASE` be a variable containing the base path of your llvm installation (so clang can be found as `$BASE/bin/clang`), then the required arguments are:
 
 1. `-g -fplugin=$BASE/lib/libcuprof.so` (or `-g -fplugin=libcuprof.so`, if `LD_LIBRARY_PATH=$BASE/lib:...`) for the compilation of every `.cu` file. This instruments host and device code to emit traces.  
@@ -57,6 +58,7 @@ $ $BASE/bin/clang++ --cuda-gpu-arch=sm_50 -O1 \
 The argument types `thread-only` and `mem-only` are exclusive. Multiple argument types are processed with AND conditions, and multiple argument values in the same argument type are processed with OR conditions.
 In the example above, multiple arguments are processed like: `(mem-only) && (kernel: your_kernel1 || your_kernel2 || your_kernel3) && (sm: 0) && (cta: 0/0/0 || 8/0/0 || 9/1/2) && (warp: 3 || 6)`
 
+
 ## Outputs
 Afterwards, just run your application.
 Traces are written to files named `trace-<your application>-<CUDA stream number>.trc`.
@@ -78,7 +80,10 @@ All `<inst_id>`s are determined at compile time (existing as constants in binary
 
 # Compatibility
 
-The CUPROF was developed and tested against LLVM and Clang version 8.0.1 and CUDA SDK 9.2.
+The CUPROF was developed and tested against LLVM and Clang version 9.0.0 and CUDA toolkit 10.1, and is compatible with CUDA toolkit 9 and 10.
+
+If you need CUPROF with LLVM and Clang version 8.0.1, switch branch to 'cuprof-llvm-8.0.1'.
+
 
 # Building
 
@@ -92,9 +97,9 @@ First, download and checkout llvm, and the CUPROF. E.g.:
 $ cd where-you-want-llvm-to-live
 $ git clone https://github.com/llvm/llvm-project
 
-  # Switch to release 8.0.1
+  # Switch to release 9.0.0
 $ cd llvm-project
-$ git checkout llvmorg-8.0.1
+$ git checkout llvmorg-9.0.0
 
   # Symlink clang
 $ cd llvm/tools
@@ -125,7 +130,7 @@ index b654b8c..7eef359 100644
 Lastly, configure from the directory `llvm-project/llvm` using cmake and build LLVM. E.g.:
 
 ```bash
-$ CUDA_DIR=/usr/local/cuda-9.2
+$ CUDA_DIR=/usr/local/cuda-10.1
 $ BASE=build
 
   # Configure from llvm-project/llvm to $BASE
@@ -151,10 +156,11 @@ The configuration requires the following flags:
   flag), so instrumentation fails with disabled assertions (which is the
   default).
 - `-DCUPROF_CUDA_FLAGS=--cuda-path=/path/to/cuda/dir` - required if your
-  CUDA 9.2 installation is located somewhere other than `/usr/local/cuda` (E.g.
-  `/opt/cuda-9.2`).
+  CUDA installation is located somewhere other than `/usr/local/cuda` (E.g.
+  `/opt/cuda-10.1`).
 
 The resulting LLVM build includes the cuprof libraries and can be used as described above.
+
 
 # Software Authors
 

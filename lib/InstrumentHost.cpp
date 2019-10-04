@@ -58,16 +58,16 @@ struct InstrumentHostPass : public ModulePass {
   Type* cuda_memcpy_kind_ty = nullptr;
   Type* cuda_err_ty = nullptr;
 
-  Constant* accdat_ctor = nullptr;
-  Constant* accdat_dtor = nullptr;
-  Constant* accdat_append = nullptr;
-  Constant* trc_fill_info = nullptr;
-  Constant* trc_copy_to_symbol = nullptr;
-  Constant* trc_touch = nullptr;
-  Constant* trc_start = nullptr;
-  Constant* trc_stop = nullptr;
-  Constant* cuda_memcpy_from_symbol = nullptr;
-  Constant* cuda_get_symbol_size = nullptr;
+  FunctionCallee accdat_ctor = nullptr;
+  FunctionCallee accdat_dtor = nullptr;
+  FunctionCallee accdat_append = nullptr;
+  FunctionCallee trc_fill_info = nullptr;
+  FunctionCallee trc_copy_to_symbol = nullptr;
+  FunctionCallee trc_touch = nullptr;
+  FunctionCallee trc_start = nullptr;
+  FunctionCallee trc_stop = nullptr;
+  FunctionCallee cuda_memcpy_from_symbol = nullptr;
+  FunctionCallee cuda_get_symbol_size = nullptr;
 
   /** Sets up pointers to (and inserts prototypes of) the utility functions
    * from the host-support library.
@@ -142,30 +142,30 @@ struct InstrumentHostPass : public ModulePass {
 
     
     accdat_ctor = module.getOrInsertFunction("___cuprof_accdat_ctor",
-                                       void_ty);
+                                             void_ty);
     accdat_dtor = module.getOrInsertFunction("___cuprof_accdat_dtor",
-                                       void_ty);
+                                             void_ty);
     accdat_append = module.getOrInsertFunction("___cuprof_accdat_append",
-                                         void_ty, string_ty, i64_ty);
+                                               void_ty, string_ty, i64_ty);
 
     
     trc_fill_info = module.getOrInsertFunction("__trace_fill_info",
-                                          void_ty, voidp_ty, i8p_ty);
+                                               void_ty, voidp_ty, i8p_ty);
     trc_copy_to_symbol = module.getOrInsertFunction("__trace_copy_to_symbol",
-                                              void_ty, i8p_ty, voidp_ty, voidp_ty);
+                                                    void_ty, i8p_ty, voidp_ty, voidp_ty);
     trc_touch = module.getOrInsertFunction("__trace_touch",
-                                       void_ty, i8p_ty, i8p_ty, i64p_ty, i32p_ty,
-                                       size_ty, size_ty, size_ty);
+                                           void_ty, i8p_ty, i8p_ty, i64p_ty, i32p_ty,
+                                           size_ty, size_ty, size_ty);
     trc_start = module.getOrInsertFunction("__trace_start",
-                                       void_ty, i8p_ty, string_ty, i16_ty);
+                                           void_ty, i8p_ty, string_ty, i16_ty);
     trc_stop = module.getOrInsertFunction("__trace_stop",
-                                      void_ty, i8p_ty);
+                                          void_ty, i8p_ty);
     
     cuda_memcpy_from_symbol = module.getOrInsertFunction("cudaMemcpyFromSymbol",
-                                                 cuda_err_ty, i8p_ty, i8p_ty,
-                                                 size_ty, size_ty, cuda_memcpy_kind_ty);
+                                                         cuda_err_ty, i8p_ty, i8p_ty,
+                                                         size_ty, size_ty, cuda_memcpy_kind_ty);
     cuda_get_symbol_size = module.getOrInsertFunction("cudaGetSymbolSize",
-                                              cuda_err_ty, i8p_ty, i8p_ty);
+                                                      cuda_err_ty, i8p_ty, i8p_ty);
   }
 
   /** Updates kernel calls to set up tracing infrastructure on host and device
@@ -200,7 +200,6 @@ struct InstrumentHostPass : public ModulePass {
 
     Type* gv_ty = trace_info_ty;
     std::string kernel_symbol_name = getSymbolNameForKernel(kernel_name.str());
-    //printf("kernel_name : %s\n", kernel_name.str().c_str());
 
     GlobalVariable* gv = getOrCreateGlobalVar(module, gv_ty, kernel_symbol_name);
 
@@ -362,7 +361,7 @@ struct InstrumentHostPass : public ModulePass {
     LLVMContext& ctx = module.getContext();
     Function* func = dyn_cast<Function>(module.getOrInsertFunction(
                                           funcname.c_str(),
-                                          Type::getVoidTy(ctx)) );
+                                          Type::getVoidTy(ctx)).getCallee() );
     if (!func || !func->empty()) return false;
     func->setCallingConv(CallingConv::C);
 
@@ -439,11 +438,11 @@ struct InstrumentHostPass : public ModulePass {
     Type* charp_ty = irb.getInt8Ty()->getPointerTo();
     Type* int_ty = irb.getInt32Ty();
     Type* fnty_arg[] = {voidpp_ty,
-                       charp_ty, charp_ty, charp_ty,
-                       int_ty, int_ty, int_ty, int_ty};
+                        charp_ty, charp_ty, charp_ty,
+                        int_ty, int_ty, int_ty, int_ty};
     auto* fty = FunctionType::get(int_ty, fnty_arg, false);
-    auto* func = module.getOrInsertFunction("__cudaRegisterVar", fty);
-    assert(func != nullptr);
+    FunctionCallee func = module.getOrInsertFunction("__cudaRegisterVar", fty);
+    assert(func.getCallee() != nullptr);
 
     for (auto* gv : vars) {
 
@@ -478,7 +477,6 @@ struct InstrumentHostPass : public ModulePass {
 
 
     //gvs.push_back(testGlobal(module));
-
   
     // do works on kernels for access data info
     for (auto kernel_name = kernel_list.cbegin();
@@ -578,13 +576,12 @@ struct InstrumentHostPass : public ModulePass {
       kernel_list.insert(kernel_name_sym);
     }
 
-
     
     
     // register global variables for trace info for all kernels registered
     // in this module
-    appendGlobalCtorDtor(module, dyn_cast<Function>(accdat_ctor), GLOBAL_CTOR);
-    appendGlobalCtorDtor(module, dyn_cast<Function>(accdat_dtor), GLOBAL_DTOR);
+    appendGlobalCtorDtor(module, dyn_cast<Function>(accdat_ctor.getCallee()), GLOBAL_CTOR);
+    appendGlobalCtorDtor(module, dyn_cast<Function>(accdat_dtor.getCallee()), GLOBAL_DTOR);
 
     Function* cuda_setup_func = module.getFunction("__cuda_register_globals");
     if (cuda_setup_func != nullptr) {
