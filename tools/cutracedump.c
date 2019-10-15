@@ -17,6 +17,7 @@
  **
  **/
 
+#define WARP_SIZE 32
 
 #include "../lib/TraceIO.h"
 
@@ -130,19 +131,22 @@ int main(int argc, char** argv) {
 
         // size
         printf(" %" PRIu32, r->size);
+
+        int8_t count_total = 0;
+        for (int32_t addr_i = 0; addr_i < r->addr_len; addr_i++) {
+          trace_record_addr_t* acc_addr = &r->addr_unit[addr_i];
+          
+          for (int32_t acc_i = 0; acc_i < acc_addr->count; acc_i++) {
+            printf(" %" PRIx64, acc_addr->addr + (acc_addr->offset)*acc_i);
+          }
+
+          count_total += acc_addr->count;
+        }
         
-        for (uint8_t i = 0; i < r->addr_len; i++) {
-          trace_record_addr_t* acc_addr = &r->addr_unit[i];
-          int64_t increment = acc_addr->offset;
-          int8_t count = acc_addr->count;
-          int8_t j;
-          for (j = 0; j < count; j++) {
-            printf(" %" PRIx64, (acc_addr->addr) + increment*j);
-          }
-          // if less then 32 access, fill with blank
-          for (; j < 32; j++) {
-            printf(" (blank)");
-          }
+        // if less then WARP_SIZE access, fill with blank
+        for (uint32_t count_remain = count_total;
+             count_remain < WARP_SIZE; count_remain++) {
+          printf(" #");
         }
 
         // inst id
