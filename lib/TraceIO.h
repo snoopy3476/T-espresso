@@ -44,20 +44,23 @@ extern "C" {
   } trace_record_addr_t;
     
   typedef struct trace_record_t {
+    
     struct {
       uint32_t x;
       uint16_t y;
       uint16_t z;
     } ctaid;
     uint64_t clock;
+    uint64_t grid;
   
-    uint32_t warp;
-    uint32_t size;
+    uint32_t sm;
+    uint32_t warp_p;
+    uint32_t warp_v;
+    uint32_t req_size;
     uint32_t instid;
   
     uint8_t type;
     uint8_t addr_len;
-    uint8_t smid;
   
     trace_record_addr_t addr_unit[1]; // managed as flexible length member
   } trace_record_t;
@@ -67,7 +70,7 @@ extern "C" {
     uint64_t kernel_count;
     uint64_t kernel_i;
     trace_header_kernel_t** kernel_accdat;
-    uint16_t block_size;
+    uint32_t cta_size;
     char new_kernel;
     trace_record_t record;
   } trace_t;
@@ -277,9 +280,11 @@ extern "C" {
 
   void trace_serialize(trace_record_t* record, record_t* buf) {
     
-    record_t data = RECORD_SET_INIT(record->addr_len, record->type, record->smid, record->warp,
+    record_t data = RECORD_SET_INIT(record->addr_len, record->type, record->instid, record->warp_v,
                                     record->ctaid.x, record->ctaid.y, record->ctaid.z,
-                                    record->clock, record->size, record->instid);
+                                    record->grid,
+                                    record->warp_p, record->sm,
+                                    record->req_size, record->clock);
     *buf = data;
 
     for (uint8_t i = 0; i < record->addr_len; i++) {
@@ -291,17 +296,21 @@ extern "C" {
   void trace_deserialize(record_t* buf, trace_record_t* record) {
     record->addr_len = RECORD_GET_ALEN(buf);
     record->type = RECORD_GET_TYPE(buf);
-    record->smid = RECORD_GET_SMID(buf);
-    record->warp = RECORD_GET_WARP(buf);
+    record->instid = RECORD_GET_INSTID(buf);
+    record->warp_v = RECORD_GET_WARP_V(buf);
   
     record->ctaid.x = RECORD_GET_CTAX(buf);
     record->ctaid.y = RECORD_GET_CTAY(buf);
     record->ctaid.z = RECORD_GET_CTAZ(buf);
+    
+    record->grid = RECORD_GET_GRID(buf);
+    
+    record->warp_p = RECORD_GET_WARP_P(buf);
+    record->sm = RECORD_GET_SM(buf);
+    record->req_size = RECORD_GET_REQ_SIZE(buf);
 
     record->clock = RECORD_GET_CLOCK(buf);
   
-    record->size = RECORD_GET_SIZE(buf);
-    record->instid = RECORD_GET_INSTID(buf);
 
     for (uint8_t i = 0; i < record->addr_len; i++) {
       record->addr_unit[i].addr = RECORD_ADDR(buf, i);
@@ -326,7 +335,7 @@ extern "C" {
     // Entry is a kernel
     if (ch == 0x00) {
       uint8_t name_len = (buf[0] >> 48) & 0xFF;
-      uint16_t block_size = (buf[0] >> 32) & 0xFFFF;
+      uint16_t cta_size = (buf[0] >> 32) & 0xFFFF;
 
       char kernel_name[256];
     
@@ -344,7 +353,7 @@ extern "C" {
       }
       
       t->new_kernel = 1;
-      t->block_size = block_size;
+      t->cta_size = cta_size;
       trace_last_error = NULL;
       return 0;
     }
@@ -414,9 +423,9 @@ extern "C" {
     return 0;
   }
 
-  int trace_write_kernel(FILE* f, const char* name, uint16_t block_size) {
+  int trace_write_kernel(FILE* f, const char* name, uint16_t cta_size) {
     uint8_t name_len = strnlen(name, 0xFF) & 0xFF;
-    uint64_t header = ((uint64_t)name_len << 48) | ((uint64_t)block_size << 32);
+    uint64_t header = ((uint64_t)name_len << 48) | ((uint64_t)cta_size << 32);
   
     if (fwrite(&header, 8, 1, f) < 1) {
       trace_last_error = "write error";

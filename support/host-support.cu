@@ -252,7 +252,7 @@ protected:
         
         bool is_found = false;
         for (int i = 0; i < trace_filter.sm_size; i++)
-          if (trace_filter.sm[i] == newrec->smid)
+          if (trace_filter.sm[i] == newrec->sm)
             is_found = true;
         
         if (!is_found)
@@ -277,7 +277,7 @@ protected:
         
         bool is_found = false;
         for (int i = 0; i < trace_filter.warp_size; i++)
-          if (trace_filter.warp[i] == newrec->warp)
+          if (trace_filter.warp[i] == newrec->warp_v)
             is_found = true;
         
         if (!is_found)
@@ -317,10 +317,10 @@ protected:
 
 
         // if same inst info with the record before - to be compressed
-        if (newrec->type == acc->type && newrec->size == acc->size &&
-	    newrec->smid == acc->smid && newrec->ctaid.x == acc->ctaid.x &&
+        if (newrec->type == acc->type && newrec->req_size == acc->req_size &&
+	    newrec->grid == acc->grid && newrec->ctaid.x == acc->ctaid.x &&
 	    newrec->ctaid.y == acc->ctaid.y && newrec->ctaid.z == acc->ctaid.z &&
-	    newrec->warp == acc->warp && newrec->clock == acc->clock) {
+	    newrec->warp_v == acc->warp_v && newrec->clock == acc->clock) {
 
           // same inst info & addr pattern - increment current addr_unit count
           if ( (compression_mode == 1 && newrec->addr_unit->addr == acc_addr->addr +

@@ -44,12 +44,16 @@ FunctionCallee getOrInsertTraceDecl(Module& module) {
 
   Type* void_ty = Type::getVoidTy(ctx);
   Type* i8p_ty = Type::getInt8PtrTy(ctx);
-  Type* i64_ty = Type::getInt64Ty(ctx);
+  Type* i8_ty = Type::getInt8Ty(ctx);
+  Type* i16_ty = Type::getInt16Ty(ctx);
   Type* i32_ty = Type::getInt32Ty(ctx);
+  Type* i64_ty = Type::getInt64Ty(ctx);
 
   return module.getOrInsertFunction("___cuprof_trace", void_ty,
-			       i8p_ty, i8p_ty, i8p_ty,
-                               i64_ty, i64_ty, i64_ty, i32_ty, i32_ty);
+                                    i8p_ty, i8p_ty, i8p_ty,
+                                    i64_ty, i64_ty, i64_ty,
+                                    i32_ty, i32_ty,
+                                    i16_ty, i8_ty);
 }
 
 std::vector<Function*> getKernelFunctions(Module& module) {
@@ -163,8 +167,8 @@ struct InstrumentDevicePass : public ModulePass {
     Value* allocs;
     Value* commits;
     Value* records;
-    Value* desc;
-    Value* slot;
+    Value* cta_arg;
+    Value* warpid_v;
   };
 
   
@@ -312,40 +316,149 @@ struct InstrumentDevicePass : public ModulePass {
 
     Module& module = *kernel->getParent();
     std::string symbol_name = getSymbolNameForKernel(kernel->getName().str());
-    //errs() << "creating device symbol " << symbol_name << "\n";
+    
+    Type* i8_pty = Type::getInt8PtrTy(ctx);
+    IntegerType* i8_ty = IntegerType::get(ctx, 8);
+    IntegerType* i32_ty = IntegerType::get(ctx, 32);
+    IntegerType* i64_ty = IntegerType::get(ctx, 64);
+    
+    FunctionType* i32_fty = FunctionType::get(i32_ty, false);
+
+
+    
+    // get warpid (virtual)
+
+    
+    InlineAsm* tid_asm[3] = {
+      InlineAsm::get(i32_fty,
+                     "mov.u32 $0, %tid.x;", "=r", false,
+                     InlineAsm::AsmDialect::AD_ATT ),
+      InlineAsm::get(i32_fty,
+                     "mov.u32 $0, %tid.y;", "=r", false,
+                     InlineAsm::AsmDialect::AD_ATT ),
+      InlineAsm::get(i32_fty,
+                     "mov.u32 $0, %tid.z;", "=r", false,
+                     InlineAsm::AsmDialect::AD_ATT )
+    };
+    
+    Value* tid[3] = {
+      irb.CreateCall(tid_asm[0]),
+      irb.CreateCall(tid_asm[1]),
+      irb.CreateCall(tid_asm[2])
+    };
+    for (int i = 0; i < 3; i++) {
+      tid[i] = irb.CreateZExt(tid[i], i64_ty);
+    }
+    
+    InlineAsm* ntid_asm[2] = {
+      InlineAsm::get(i32_fty,
+                     "mov.u32 $0, %ntid.x;", "=r", false,
+                     InlineAsm::AsmDialect::AD_ATT ),
+      InlineAsm::get(i32_fty,
+                     "mov.u32 $0, %ntid.y;", "=r", false,
+                     InlineAsm::AsmDialect::AD_ATT )
+    };
+
+    
+    Value* ntid[2] = {
+      irb.CreateCall(ntid_asm[0]),
+      irb.CreateCall(ntid_asm[1])
+    };
+    for (int i = 0; i < 2; i++) {
+      ntid[i] = irb.CreateZExt(ntid[i], i64_ty);
+    }
+
+    // tid_x + ntid_x * (tid_y + tid_z * ntid_y)
+    Value* thread_i = irb.CreateAdd(
+      irb.CreateMul(tid[2], ntid[1]),
+      tid[1]
+      );
+    thread_i = irb.CreateMul(ntid[0], thread_i);
+    thread_i = irb.CreateAdd(tid[0], thread_i);
+
+    Value* warpid_v = irb.CreateTrunc(
+      irb.CreateUDiv(thread_i, ConstantInt::get(i64_ty, 32)),
+      i32_ty
+      );
+
+
+
+
+    // get ctaid (serialized)
+    
+    InlineAsm* ctaid_asm[3];
+    ctaid_asm[0] = InlineAsm::get(i32_fty,
+                                  "mov.u32 $0, %ctaid.x;", "=r", false,
+                                  InlineAsm::AsmDialect::AD_ATT );
+    ctaid_asm[1] = InlineAsm::get(i32_fty,
+                                  "mov.u32 $0, %ctaid.y;", "=r", false,
+                                  InlineAsm::AsmDialect::AD_ATT );
+    ctaid_asm[2] = InlineAsm::get(i32_fty,
+                                  "mov.u32 $0, %ctaid.z;", "=r", false,
+                                  InlineAsm::AsmDialect::AD_ATT );
+    Value* ctaid[3] = {
+      irb.CreateCall(ctaid_asm[0]),
+      irb.CreateCall(ctaid_asm[1]),
+      irb.CreateCall(ctaid_asm[2])
+    };
+    for (int i = 0; i < 3; i++) {
+      ctaid[i] = irb.CreateZExt(ctaid[i], i64_ty);
+    }
+    
+
+    // ctaid_x <32-bit>
+    // ctaid_y <16-bit>
+    // ctaid_z <16-bit>
+    // ctaid_serialized: ctaid_x ctaid_y ctaid_z <64-bit>
+    Value* cta_arg_x = irb.CreateLShr(ctaid[0], 32);
+    Value* cta_arg_y = irb.CreateAnd(ctaid[1], 0xFFFF);
+    cta_arg_y = irb.CreateLShr(cta_arg_y, 16);
+    Value* cta_arg_z = irb.CreateAnd(ctaid[2], 0xFFFF);
+    Value* ctaid_serialized = irb.CreateOr(
+      irb.CreateOr(cta_arg_x, cta_arg_y),
+      cta_arg_z
+      );
+
+
+    
+
+    InlineAsm* smid_asm = InlineAsm::get(i32_fty,
+                                         "mov.u32 $0, %smid;", "=r", false,
+                                         InlineAsm::AsmDialect::AD_ATT);
+    
+    Value* smid = irb.CreateCall(smid_asm);
+    Value* slot = irb.CreateAnd(smid, irb.getInt32(SLOTS_NUM - 1));
+
+
+    
     auto* gv = defineDeviceGlobal(module, trace_info_ty, symbol_name);
     assert(gv != nullptr);
-    
+
+    Value* base_i = irb.CreateMul(slot, ConstantInt::get(i32_ty, CACHELINE));
+    Value* slot_i = irb.CreateMul(slot, ConstantInt::get(i32_ty, SLOTS_SIZE));
+    slot_i = irb.CreateMul(slot_i, ConstantInt::get(i32_ty, RECORD_SIZE));
 
     Value* allocs_ptr = irb.CreateStructGEP(nullptr, gv, 0);
     Value* allocs = irb.CreateLoad(allocs_ptr, "allocs");
+    allocs = irb.CreateInBoundsGEP(i8_ty, allocs, base_i);
 
     Value* commits_ptr = irb.CreateStructGEP(nullptr, gv, 1);
     Value* commits = irb.CreateLoad(commits_ptr, "commits");
+    commits = irb.CreateInBoundsGEP(i8_ty, commits, base_i);
 
     Value* records_ptr = irb.CreateStructGEP(nullptr, gv, 2);
     Value* records = irb.CreateLoad(records_ptr, "records");
+    records = irb.CreateInBoundsGEP(i8_ty, records, slot_i);
+    
 
-    IntegerType* i32_ity = IntegerType::get(module.getContext(), 32);
 
-    FunctionType* i32_fty = FunctionType::get(i32_ity, false);
-
-    InlineAsm* smid_asm = InlineAsm::get(i32_fty,
-                                        "mov.u32 $0, %smid;", "=r", false,
-                                        InlineAsm::AsmDialect::AD_ATT );
-    Value* smid = irb.CreateCall(smid_asm);
-
-    auto smid64 = irb.CreateZExtOrBitCast(smid, irb.getInt64Ty(), "desc");
-    auto desc = irb.CreateShl(smid64, 32);
-
-    auto slot = irb.CreateAnd(smid, irb.getInt32(SLOTS_NUM - 1));
 
     
     info->allocs = allocs;
     info->commits = commits;
     info->records = records;
-    info->desc = desc;
-    info->slot = slot;
+    info->cta_arg = ctaid_serialized;
+    info->warpid_v = warpid_v;
     
     return irb.saveIP();
   }
@@ -356,6 +469,7 @@ struct InstrumentDevicePass : public ModulePass {
   void instrumentMemAccess(Function* func, ArrayRef<Instruction*> memacc_insts,
                         TraceInfoValues* info) {
     Module& module = *func->getParent();
+    LLVMContext& ctx = module.getContext();
 
     FunctionCallee trace_call = getOrInsertTraceDecl(module);
     if (!trace_call.getCallee()) {
@@ -365,81 +479,89 @@ struct InstrumentDevicePass : public ModulePass {
 
     const DataLayout& dat_layout = func->getParent()->getDataLayout();
     
-    auto allocs = info->allocs;
-    auto commits = info->commits;
-    auto records = info->records;
-    auto slot = info->slot;
-    auto desc = info->desc;
+    Value* allocs = info->allocs;
+    Value* commits = info->commits;
+    Value* records = info->records;
+    Value* cta_arg = info->cta_arg;
+    Value* warpid_v = info->warpid_v;
 
     IRBuilder<> irb(func->front().getFirstNonPHI());
 
       
-    IntegerType* i64_ty = IntegerType::get(module.getContext(), 64);
+    IntegerType* i8_ty = IntegerType::get(ctx, 8);
+    IntegerType* i16_ty = IntegerType::get(ctx, 16);
+    IntegerType* i32_ty = IntegerType::get(ctx, 32);
+    IntegerType* i64_ty = IntegerType::get(ctx, 64);
     FunctionType* clockasm_fty = FunctionType::get(i64_ty, false);
     InlineAsm* clock_asm = InlineAsm::get(clockasm_fty,
                                          "mov.u64 $0, %clock64;", "=l", true,
-                                         InlineAsm::AsmDialect::AD_ATT );
+                                          InlineAsm::AsmDialect::AD_ATT );
 
     for (auto* inst : memacc_insts) {
       Value* ptr_operand = nullptr;
-      Value* dat = nullptr;
-      Value* ldesc = nullptr;
       irb.SetInsertPoint(inst);
-      
+
+
+      // get type & addr
+      uint8_t type_num = 0;
       if (auto loadinst = dyn_cast<LoadInst>(inst)) {
         ptr_operand = loadinst->getPointerOperand();
-        ldesc = irb.CreateOr(desc, ((uint64_t)RECORD_LOAD << RECORD_TYPE_SHIFT));
+        type_num = (uint8_t)RECORD_LOAD;
                              
       } else if (auto storeinst = dyn_cast<StoreInst>(inst)) {
         ptr_operand = storeinst->getPointerOperand();
-        ldesc = irb.CreateOr(desc, ((uint64_t)RECORD_STORE << RECORD_TYPE_SHIFT));
+        type_num = (uint8_t)RECORD_STORE;
                              
       } else if (auto atomicinst = dyn_cast<AtomicRMWInst>(inst)) {
         // ATOMIC Add/Sub/Exch/Min/Max/And/Or/Xor //
         ptr_operand = atomicinst->getPointerOperand();
-        ldesc = irb.CreateOr(desc, ((uint64_t)RECORD_ATOMIC << RECORD_TYPE_SHIFT));
+        type_num = (uint8_t)RECORD_ATOMIC;
                              
       } else if (auto atomicinst = dyn_cast<AtomicCmpXchgInst>(inst)) {
         // ATOMIC CAS //
         ptr_operand = atomicinst->getPointerOperand();
-        ldesc = irb.CreateOr(desc, ((uint64_t)RECORD_ATOMIC << RECORD_TYPE_SHIFT));
+        type_num = (uint8_t)RECORD_ATOMIC;
                              
       } else if (auto* callinst = dyn_cast<CallInst>(inst)) {
         // ATOMIC Inc/Dec //
         assert(callinst->getCalledFunction()->getName()
                .startswith("llvm.nvvm.atomic"));
         ptr_operand = callinst->getArgOperand(0);
-        ldesc = irb.CreateOr(desc, ((uint64_t)RECORD_ATOMIC << RECORD_TYPE_SHIFT));
+        type_num = RECORD_ATOMIC;
                              
       } else {
         report_fatal_error("invalid access type encountered, this should not have happened");
       }
 
 
-      dat = irb.CreatePtrToInt(ptr_operand,  irb.getInt64Ty());
+      Value* addr = irb.CreatePtrToInt(ptr_operand, irb.getInt64Ty());
+      Value* type = ConstantInt::get(i8_ty, type_num);
       auto p_ty = dyn_cast<PointerType>(ptr_operand->getType());
-      ldesc = irb.CreateOr(ldesc, (uint64_t) dat_layout.getTypeStoreSize(p_ty->getElementType()));
-
-      uint32_t inst_id = 0;
-      if (MDNode* mdnode = inst->getMetadata(TRACE_DEBUG_DATA)) {
-        inst_id = (uint32_t) std::stoi(cast<MDString>(mdnode->getOperand(0))->getString().str());
-      }
-      Constant* inst_id_val = Constant::getIntegerValue(irb.getInt32Ty(), APInt(32, inst_id));
+      Value* size = ConstantInt::get(i16_ty, dat_layout.getTypeStoreSize(p_ty->getElementType()));
       
+
+      uint32_t inst_id_num = 0;
+      if (MDNode* mdnode = inst->getMetadata(TRACE_DEBUG_DATA)) {
+        inst_id_num = (uint32_t) std::stoi(cast<MDString>(mdnode->getOperand(0))->getString().str());
+      }
+      Constant* inst_id = ConstantInt::get(i32_ty, inst_id_num);
       Value* clock = irb.CreateCall(clock_asm);
-      Value* trace_call_args[] = {records, allocs, commits, ldesc, dat, clock, slot, inst_id_val};
+
+      
+      Value* trace_call_args[] = {records, allocs, commits, addr, clock, cta_arg, inst_id, warpid_v, size, type};
       irb.CreateCall(trace_call, trace_call_args);
     }
   }
 
 
   
-
   void instrumentScheduling(Function* func, IRBuilderBase::InsertPoint ipfront,
                             ArrayRef<Instruction*> retinsts,
                             TraceInfoValues* info) {
-	
+    
     Module& module = *func->getParent();
+    LLVMContext& ctx = module.getContext();
+    
 
     
     FunctionCallee trace_call = getOrInsertTraceDecl(module);
@@ -447,59 +569,60 @@ struct InstrumentDevicePass : public ModulePass {
       report_fatal_error("No ___cuprof_trace declaration found");
     }
     
-    auto allocs = info->allocs;
-    auto commits = info->commits;
-    auto records = info->records;
-    auto slot = info->slot;
-    auto desc = info->desc;
+    Value* allocs = info->allocs;
+    Value* commits = info->commits;
+    Value* records = info->records;
+    Value* cta_arg = info->cta_arg;
+    Value* warpid_v = info->warpid_v;
 
 
 
-    IntegerType* i32_ty = IntegerType::get(module.getContext(), 32);
+    IntegerType* i8_ty = IntegerType::get(ctx, 8);
+    IntegerType* i16_ty = IntegerType::get(ctx, 16);
+    IntegerType* i32_ty = IntegerType::get(ctx, 32);
+    IntegerType* i64_ty = IntegerType::get(ctx, 64);
+    PointerType* i8p_ty = i8_ty->getPointerTo();
     FunctionType* i32_fty = FunctionType::get(i32_ty, false);
-    IntegerType* i64_ty = IntegerType::get(module.getContext(), 64);
     FunctionType* i64_fty = FunctionType::get(i64_ty, false);
     
     InlineAsm* clock_asm = InlineAsm::get(i64_fty,
                                          "mov.u64 $0, %clock64;", "=l", true,
                                          InlineAsm::AsmDialect::AD_ATT );
-    InlineAsm* laneid_asm = InlineAsm::get(i32_fty,
-                                          "mov.u32 $0, %laneid;", "=r", false,
-                                          InlineAsm::AsmDialect::AD_ATT );
-    
-    Constant* inst_id = Constant::getIntegerValue(i32_ty, APInt(32, 0));
-    
     
     IRBuilder<> irb(func->front().getFirstNonPHI());
     irb.restoreIP(ipfront);
 
 
     // trace call
+    Value* addr = ConstantInt::get(i64_ty, 0);
     Value* clock = irb.CreateCall(clock_asm);
-    Value* ldesc = irb.CreateOr(desc, ((uint64_t)RECORD_EXECUTE << RECORD_TYPE_SHIFT));
-    Value* laneid = irb.CreateCall(laneid_asm);
-    Instruction::CastOps laneid_castop = CastInst::getCastOpcode(laneid, false, i64_ty, false);
-    laneid = irb.CreateCast(laneid_castop, laneid, i64_ty);
+    Value* inst_id = ConstantInt::get(i32_ty, 0);
+    Value* size = ConstantInt::get(i16_ty, 0);
+    Value* type = ConstantInt::get(i8_ty, RECORD_EXECUTE);
 
-    Value* trace_call_args[] = {records, allocs, commits, ldesc, laneid, clock, slot, inst_id};
+    Value* trace_call_args[] = {records, allocs, commits, addr, clock, cta_arg, inst_id, warpid_v, size, type};
     irb.CreateCall(trace_call, trace_call_args);
 
 
     // trace ret
+
+    InlineAsm* laneid_asm = InlineAsm::get(i32_fty,
+                                          "mov.u32 $0, %laneid;", "=r", false,
+                                          InlineAsm::AsmDialect::AD_ATT );
+    Value* laneid = irb.CreateCall(laneid_asm);
+    Instruction::CastOps laneid_castop = CastInst::getCastOpcode(laneid, false, i64_ty, false);
+    addr = irb.CreateCast(laneid_castop, laneid, i64_ty);
+    type = ConstantInt::get(i8_ty, RECORD_RETURN);
+    
     for (auto* inst : retinsts) {
-      Value* dat = nullptr;
-      Value* ldesc = nullptr;
       irb.SetInsertPoint(inst);
 
-      if (isa<ReturnInst>(inst)) {
-        dat = laneid;
-        ldesc = irb.CreateOr(desc, ((uint64_t)RECORD_RETURN << RECORD_TYPE_SHIFT));
-      } else {
+      if (! isa<ReturnInst>(inst)) {
         report_fatal_error("invalid access type encountered, this should not have happened");
       }
 
       Value* clock = irb.CreateCall(clock_asm);
-      Value* trace_call_args[] = {records, allocs, commits, ldesc, dat, clock, slot, inst_id};
+      Value* trace_call_args[] = {records, allocs, commits, addr, clock, cta_arg, inst_id, warpid_v, size, type};
       irb.CreateCall(trace_call, trace_call_args);
     }
   }

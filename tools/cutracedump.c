@@ -82,7 +82,7 @@ int main(int argc, char** argv) {
     die("%s", trace_last_error);
   }
 
-  uint16_t block_size = 0;
+  uint64_t cta_size = 0;
 
   trace_header_kernel_t* kernel_info;  
   while (trace_next(trace) == 0) {
@@ -90,7 +90,7 @@ int main(int argc, char** argv) {
     if (trace->new_kernel) {
       kernel_info = trace->kernel_accdat[trace->kernel_i];
       printf("K %s\n", kernel_info->kernel_name);
-      block_size = trace->block_size;
+      cta_size = trace->cta_size;
     } else {
       trace_record_t* r = &trace->record;
       if (quiet) {
@@ -117,12 +117,16 @@ int main(int argc, char** argv) {
       
         
       
-      printf("%c %s %" PRIu8
-             " %" PRIu16 " %" PRIu32 " %" PRIu16 " %" PRIu16
-             " %" PRIu32 " %020" PRIu64,
-             trace_type, OP_TYPE_NAMES[r->type], r->smid,
-             block_size, r->ctaid.x, r->ctaid.y, r->ctaid.z,
-             r->warp, r->clock);
+      printf("%c %s"
+             " %" PRIu64 " %" PRIu32 " %" PRIu16 " %" PRIu16 " %" PRIu32
+             " %" PRIu64
+             " %" PRIu32 " %" PRIu32
+             " %020" PRIu64,
+             trace_type, OP_TYPE_NAMES[r->type],
+             r->grid, r->ctaid.x, r->ctaid.y, r->ctaid.z, r->warp_v,
+             cta_size,
+             r->sm, r->warp_p,
+             r->clock);
       
 
       // print mem access info
@@ -130,7 +134,7 @@ int main(int argc, char** argv) {
         trace_header_inst_t* inst_info = &kernel_info->insts[r->instid];
 
         // size
-        printf(" %" PRIu32, r->size);
+        printf(" %" PRIu32, r->req_size);
 
         int8_t count_total = 0;
         for (int32_t addr_i = 0; addr_i < r->addr_len; addr_i++) {
