@@ -218,9 +218,11 @@ protected:
     volatile uint32_t* valloc = (uint32_t*)alloc_ptr;
 
     
-    // if kernel is still active we only want to read full slots
+    // flush only if kernel is not active,
+    // or kernel is active but slot is full and all allocs are committed (no writes anymore)
     uint32_t records_count = *vcommit;
-    if (is_kernel_active && !(records_count > SLOTS_SIZE - 32)) {
+    if (is_kernel_active &&
+        (records_count <= SLOTS_SIZE - 32 || records_count != *valloc)) {
       return 1;
     }
 

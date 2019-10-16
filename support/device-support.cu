@@ -27,10 +27,26 @@ extern "C" {
                         threadIdx.y * blockDim.x +
                         threadIdx.z * blockDim.x * blockDim.y) / 32; /////
 
-    if (lane_id == lowest)
+    
+    
+    // slot allocation
+    
+    if (lane_id == lowest) {
       while(*valloc > (SLOTS_SIZE - 32) ||
-            (id = atomicAdd(alloc, n_active)) > (SLOTS_SIZE - 32));
+            (id = atomicAdd(alloc, n_active)) > (SLOTS_SIZE - 32)) {
 
+        // if slot is over-allocated, cancel allocation and wait for flush
+        if (id) {
+          atomicSub(alloc, n_active);
+          id = 0;
+        }
+      }
+    }
+
+
+    
+    // record write
+    
     uint32_t record_offset = __shfl_sync(FULL_MASK, id, lowest) + rlane_id;
     record_t* record = (record_t*) &(records[(slot_offset + record_offset) * RECORD_SIZE]); /////
     
@@ -42,6 +58,10 @@ extern "C" {
     
     __threadfence_system();
 
+
+    
+    // slot commit
+    
     if (lane_id == lowest) atomicAdd(commit, n_active);
   }
 
