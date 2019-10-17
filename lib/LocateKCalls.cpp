@@ -6,13 +6,73 @@
 
 using namespace llvm;
 
-SmallVector<CallInst*, 4> findConfigureCalls(Module& module) {
+SmallVector<Function*, 32> findKernels(Module& module) {
+  SmallVector<Function*, 32> kernel_list;
+  
+  Function* func_callee[] = {
+    module.getFunction("__cudaPopCallConfiguration"),
+    module.getFunction("cudaLaunchKernel")
+  };
+
+  const int FUNC_COUNT = sizeof(func_callee)/sizeof(*func_callee);
+  
+  std::vector<Function*> caller_list[FUNC_COUNT];
+
+  // find all caller that func_callee exists
+  for (int i = 0; i < FUNC_COUNT; i++) {
+    if (func_callee[i] == nullptr) return {};
+    
+    for (auto* user : func_callee[i]->users()) {
+      CallInst* callinst_cur = dyn_cast<CallInst>(user);
+      Function* func_cur;
+      if (callinst_cur && (func_cur = callinst_cur->getCaller())) {
+        caller_list[i].push_back(func_cur);
+      }
+    }
+
+    std::sort(caller_list[i].begin(), caller_list[i].end());
+  }
+
+
+  // filter common elements
+  for (int i = 1; i < FUNC_COUNT; i++) {
+    std::vector<Function*>::iterator
+      iter = caller_list[0].begin(),
+      iter_new = caller_list[i].begin();
+    
+    while (iter != caller_list[0].end() &&
+           iter_new != caller_list[i].end()) {
+      if (*iter == *iter_new) {
+        ++iter;
+        ++iter_new;
+      } else if (*iter > *iter_new) {
+        ++iter_new;
+      } else {
+        iter = caller_list[0].erase(iter);
+      }
+    }
+  }
+
+
+  // insert all common to return value
+  for (auto iter = caller_list[0].cbegin();
+       iter != caller_list[0].cend();
+       ++iter) {
+    kernel_list.push_back(*iter);
+  }
+
+  
+  
+  return kernel_list;
+}
+
+SmallVector<CallInst*, 32> findConfigureCalls(Module& module) {
   Function* func = module.getFunction("__cudaPushCallConfiguration");
   if (func == nullptr) {
     return {};
   }
 
-  SmallVector<CallInst*, 4> ret_val;
+  SmallVector<CallInst*, 32> ret_val;
   for (auto* user : func->users()) {
     auto* callinst_cur = dyn_cast<CallInst>(user);
     if (callinst_cur != nullptr) {
@@ -71,7 +131,7 @@ Instruction* findLaunchFor(CallInst* configure_call) {
   return launch;
 }
 
-std::string getKernelNameOf(Instruction* launch) {
+Function* getCalledKernel(Instruction* launch) {
   Function* callee = nullptr;
   Value* op1 = nullptr;
   CallInst* callinst = dyn_cast<CallInst>(launch);
@@ -88,19 +148,19 @@ std::string getKernelNameOf(Instruction* launch) {
         op1 = invokeinst->getArgOperand(0);
       }
     } else {
-      return "";
+      return nullptr;
     }
   }
-  if (callee->hasName() && callee->getName() != "cudaLaunchKernel") {
-    return callee->getName();
+  if (callee->hasName() && callee->getName().str().compare("cudaLaunchKernel") != 0) {
+    return callee;
   } else {
     op1 = op1->stripPointerCasts();
     callee = dyn_cast<Function>(op1);
     if (callee != nullptr && callee->hasName()) {
-      return callee->getName();
+      return callee;
     }
   }
-  return "";
+  return nullptr;
 }
 
 
@@ -109,21 +169,34 @@ namespace llvm {
   LocateKCallsPass::LocateKCallsPass() : ModulePass(ID) {}
 
   bool LocateKCallsPass::runOnModule(Module& module) {
-    launches.clear();
-    for (auto* configure : findConfigureCalls(module)) {
-      Instruction* launch = findLaunchFor(configure);
-      std::string name = getKernelNameOf(launch);
-      launches.push_back(KCall(configure, launch, name));
+    launch_list.clear();
+    
+
+    for (Function* kernel : findKernels(module)) {
+      kernel_list.push_back(kernel);
     }
+
+    for (CallInst* configure : findConfigureCalls(module)) {
+      Instruction* launch = findLaunchFor(configure);
+      Function* kernel = getCalledKernel(launch);
+      launch_list.push_back(KCall(configure, launch, kernel));
+    }
+    
+    
     return false;
   }
 
   void LocateKCallsPass::releaseMemory() {
-    launches.clear();
+    launch_list.clear();
+    kernel_list.clear();
   }
 
-  SmallVector<KCall, 4> LocateKCallsPass::getLaunches() const {
-    return launches;
+  SmallVector<KCall, 32> LocateKCallsPass::getLaunchList() const {
+    return launch_list;
+  }
+
+  SmallVector<Function*, 32> LocateKCallsPass::getKernelList() const {
+    return kernel_list;
   }
 
   char LocateKCallsPass::ID = 0;
@@ -135,4 +208,4 @@ namespace llvm {
 }
 
 static RegisterPass<LocateKCallsPass>
-  X("cuprof-locate-kcalls", "locate kernel launches", false, false);
+  X("cuprof-locate-kcalls", "detect kernels and locate its launches", false, false);

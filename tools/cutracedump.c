@@ -121,11 +121,11 @@ int main(int argc, char** argv) {
              " %" PRIu64 " %" PRIu32 " %" PRIu16 " %" PRIu16 " %" PRIu32
              " %" PRIu64
              " %" PRIu32 " %" PRIu32
-             " %020" PRIu64,
+             " %015" PRIu64,
              trace_type, OP_TYPE_NAMES[r->type],
-             r->grid, r->ctaid.x, r->ctaid.y, r->ctaid.z, r->warp_v,
+             r->grid, r->ctaid.x, r->ctaid.y, r->ctaid.z, r->warpv,
              cta_size,
-             r->sm, r->warp_p,
+             r->sm, r->warpp,
              r->clock);
       
 
@@ -155,7 +155,7 @@ int main(int argc, char** argv) {
 
         // inst id
         printf(" %" PRIu32 " %s",
-               inst_info->inst_id, kernel_info->kernel_name);
+               inst_info->instid, kernel_info->kernel_name);
 
         // position at src file
         if (inst_info->inst_filename_len > 0) {

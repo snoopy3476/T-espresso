@@ -5,10 +5,13 @@ add_llvm_library(libcuprof MODULE
   LinkDeviceSupport.cpp
   InstrumentDevice.cpp
   LocateKCalls.cpp
-
   InstrumentHost.cpp
-
   RegisterStandardPasses.cpp
+
+  Common.h
+  LocateKCalls.h
+  Passes.h
+  TraceIO.h
   )
 add_dependencies(libcuprof
   cuprofdevice

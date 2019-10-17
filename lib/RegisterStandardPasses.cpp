@@ -20,7 +20,6 @@ using namespace llvm;
 
 static InstrumentPassArg pass_args = {true, true};
 
-#ifndef CLANG_PASS_ONLY
 namespace clang {
   
   class CuprofPluginEntry : public PluginASTAction {
@@ -41,14 +40,22 @@ namespace clang {
       pass_args.trace_thread = true;
       pass_args.trace_mem = true;
       
+      const char ARG_TYPE_DELIM = ':';
+      const char ARG_TYPE_DELIM_STR[] = {ARG_TYPE_DELIM, 0};
+      const char ARG_VAL_ASSIGN_DELIM = '=';
+      const char ARG_VAL_DELIM = ',';
+      const char ARG_VAL_DIM_DELIM = '/';
       
       std::stringstream argslist;
-      std::copy(args.begin(), args.end(), std::ostream_iterator<std::string>(argslist, ","));
+      std::copy(
+        args.begin(), args.end(),
+        std::ostream_iterator<std::string>(argslist, ARG_TYPE_DELIM_STR)
+        );
 
       
       std::string optstr;
-      while (getline(argslist, optstr, ',')) {
-        size_t equal_pos = optstr.find('=');
+      while (getline(argslist, optstr, ARG_TYPE_DELIM)) {
+        size_t equal_pos = optstr.find(ARG_VAL_ASSIGN_DELIM);
         std::string optname = optstr.substr(0, equal_pos);
         std::stringstream optarglist;
         if (equal_pos != std::string::npos) {
@@ -71,32 +78,32 @@ namespace clang {
           
         } else if (optname == "kernel") {
           std::string optarg;
-          while (getline(optarglist, optarg, ' ')) {
+          while (getline(optarglist, optarg, ARG_VAL_DELIM)) {
             
             pass_args.kernel.push_back(optarg);
           }
 
           
-        } else if (optname == "sm") {
+        } else if (optname == "grid") {
           std::string optarg;
-          while (getline(optarglist, optarg, ' ')) {
+          while (getline(optarglist, optarg, ARG_VAL_DELIM)) {
             
             if (std::all_of(optarg.begin(), optarg.end(), ::isdigit)) {
-              uint8_t smid = (uint8_t)(std::stoi(optarg) & 0xFF);
-              pass_args.sm.push_back(smid);
+              uint64_t grid = (uint64_t)(std::stoi(optarg));
+              pass_args.grid.push_back(grid);
             }
           }
 
           
         } else if (optname == "cta") {
           std::string optarg;
-          while (getline(optarglist, optarg, ' ')) {
+          while (getline(optarglist, optarg, ARG_VAL_DELIM)) {
             
             uint32_t ctaid[3] = {0, 0, 0};
             std::stringstream ctaidlist(optarg);
             std::string ctaid_cur;
             
-            for (int i = 0; i < 3 && getline(ctaidlist, ctaid_cur, '/'); i++) {
+            for (int i = 0; i < 3 && getline(ctaidlist, ctaid_cur, ARG_VAL_DIM_DELIM); i++) {
               if (std::all_of(ctaid_cur.begin(), ctaid_cur.end(), ::isdigit)) {
                 ctaid[i] = stoi(ctaid_cur);
               }
@@ -110,13 +117,35 @@ namespace clang {
           }
           
 
-        } else if (optname == "warp") {
+        } else if (optname == "warpv") {
           std::string optarg;
-          while (getline(optarglist, optarg, ' ')) {
+          while (getline(optarglist, optarg, ARG_VAL_DELIM)) {
             
             if (std::all_of(optarg.begin(), optarg.end(), ::isdigit)) {
-              uint32_t warpid = std::stoi(optarg);
-              pass_args.warp.push_back(warpid);
+              uint32_t warpid_v = std::stoi(optarg);
+              pass_args.warpv.push_back(warpid_v);
+            }
+          }
+
+          
+        } else if (optname == "sm") {
+          std::string optarg;
+          while (getline(optarglist, optarg, ARG_VAL_DELIM)) {
+            
+            if (std::all_of(optarg.begin(), optarg.end(), ::isdigit)) {
+              uint32_t sm = (uint32_t)(std::stoi(optarg));
+              pass_args.sm.push_back(sm);
+            }
+          }
+          
+
+        } else if (optname == "warpp") {
+          std::string optarg;
+          while (getline(optarglist, optarg, ARG_VAL_DELIM)) {
+            
+            if (std::all_of(optarg.begin(), optarg.end(), ::isdigit)) {
+              uint32_t warpid_p = std::stoi(optarg);
+              pass_args.warpp.push_back(warpid_p);
             }
           }
           
@@ -145,7 +174,6 @@ namespace clang {
   X("cuprof", "cuda profiler");
   
 }
-#endif
   
 
 

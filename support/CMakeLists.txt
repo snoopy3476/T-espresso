@@ -22,7 +22,7 @@ add_custom_command(OUTPUT "${LLVM_BINARY_DIR}/lib/libcuprofhost.a"
     
   
   WORKING_DIRECTORY "${LLVM_BINARY_DIR}"
-  DEPENDS host-support.cu ../lib/Common.h clang
+  DEPENDS host-support.cu ../lib/Common.h clang llvm-ar
   VERBATIM
   )
 add_custom_target(cuprofhost

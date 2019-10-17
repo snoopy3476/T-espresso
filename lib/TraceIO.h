@@ -20,7 +20,7 @@ extern "C" {
   
   
   typedef struct trace_header_inst_t {
-    uint32_t inst_id;
+    uint32_t instid;
     uint32_t row;
     uint32_t col;
     uint8_t inst_filename_len;
@@ -54,8 +54,8 @@ extern "C" {
     uint64_t grid;
   
     uint32_t sm;
-    uint32_t warp_p;
-    uint32_t warp_v;
+    uint32_t warpp;
+    uint32_t warpv;
     uint32_t req_size;
     uint32_t instid;
   
@@ -76,6 +76,12 @@ extern "C" {
   } trace_t;
 
 
+
+#define NAME_UNKNOWN "(unknown)"
+  trace_header_kernel_t empty_kernel = {
+    sizeof(NAME_UNKNOWN)+1, NAME_UNKNOWN, 0, {0}
+  };
+  
   const char* trace_last_error = NULL;
 
 /******************************************************************************
@@ -140,7 +146,7 @@ extern "C" {
       trace_header_inst_t* inst_header = &kernel_header->insts[i];
       
       buf[offset++] = inst_header->inst_filename_len; // inst filename length
-      offset += int_serialize(buf + offset, 4, inst_header->inst_id); // inst id in kernel
+      offset += int_serialize(buf + offset, 4, inst_header->instid); // inst id in kernel
       offset += int_serialize(buf + offset, 4, inst_header->row); // inst row in file
       offset += int_serialize(buf + offset, 4, inst_header->col); // inst col in file
       
@@ -184,14 +190,14 @@ extern "C" {
       trace_header_inst_t* inst_header = &kernel_header->insts[i];
       
       inst_header->inst_filename_len = serialized_data[offset++]; // inst filename length
-      offset += int_deserialize(&inst_header->inst_id, 4, serialized_data + offset); // inst id of kernelcallheader
+      offset += int_deserialize(&inst_header->instid, 4, serialized_data + offset); // inst id of kernelcallheader
       offset += int_deserialize(&inst_header->row, 4, serialized_data + offset); // inst row in file
       offset += int_deserialize(&inst_header->col, 4, serialized_data + offset); // inst col in file
       
       memcpy(inst_header->inst_filename, serialized_data + offset, inst_header->inst_filename_len); // inst filename
       offset += inst_header->inst_filename_len;
 
-      if (i != inst_header->inst_id) {
+      if (i != inst_header->instid) {
         fprintf(stderr, "cuprof: Failed to deserialize kernel header!\n");
         abort();
       }
@@ -200,6 +206,53 @@ extern "C" {
     return offset;
   }
 
+
+
+
+
+  void trace_serialize(trace_record_t* record, record_t* buf) {
+    
+    record_t data = {
+      RECORD_SET_INIT(record->addr_len, record->type, record->instid, record->warpv,
+                      record->ctaid.x, record->ctaid.y, record->ctaid.z,
+                      record->grid,
+                      record->warpp, record->sm,
+                      record->req_size, record->clock)
+    };
+    *buf = data;
+
+    for (uint8_t i = 0; i < record->addr_len; i++) {
+      RECORD_ADDR(buf, i) = record->addr_unit[i].addr;
+      RECORD_ADDR_META(buf, i) =
+        (record->addr_unit[i].offset << 8) | ((int64_t)record->addr_unit[i].count & 0xFF);
+    }
+  }
+
+  void trace_deserialize(record_t* buf, trace_record_t* record) {
+    record->addr_len = RECORD_GET_ALEN(buf);
+    record->type = RECORD_GET_TYPE(buf);
+    record->instid = RECORD_GET_INSTID(buf);
+    record->warpv = RECORD_GET_WARP_V(buf);
+  
+    record->ctaid.x = RECORD_GET_CTAX(buf);
+    record->ctaid.y = RECORD_GET_CTAY(buf);
+    record->ctaid.z = RECORD_GET_CTAZ(buf);
+    
+    record->grid = RECORD_GET_GRID(buf);
+    
+    record->warpp = RECORD_GET_WARP_P(buf);
+    record->sm = RECORD_GET_SM(buf);
+    record->req_size = RECORD_GET_REQ_SIZE(buf);
+
+    record->clock = RECORD_GET_CLOCK(buf);
+  
+
+    for (uint8_t i = 0; i < record->addr_len; i++) {
+      record->addr_unit[i].addr = RECORD_ADDR(buf, i);
+      record->addr_unit[i].offset = RECORD_GET_OFFSET(buf, i);
+      record->addr_unit[i].count = RECORD_GET_COUNT(buf, i);
+    }
+  }
 
 
   
@@ -242,7 +295,8 @@ extern "C" {
     
     // build memory access data for each kernels
     uint64_t kernel_count = 0;
-    
+
+    res->kernel_accdat[0] = &empty_kernel;
     for (uint32_t offset = 0; offset < accdat_len; kernel_count++) {
       size_t kernel_header_size = get_kernel_header_bytes_after_deserialize(accdat + offset);
       trace_header_kernel_t* kernel_cur = (trace_header_kernel_t*) malloc(kernel_header_size);
@@ -251,7 +305,7 @@ extern "C" {
         return NULL;
       }
       
-      res->kernel_accdat[kernel_count] = kernel_cur;
+      res->kernel_accdat[kernel_count+1] = kernel_cur;
       offset += header_deserialize(kernel_cur, accdat + offset);
     }
 
@@ -276,53 +330,6 @@ extern "C" {
   }
 
 
-
-
-  void trace_serialize(trace_record_t* record, record_t* buf) {
-    
-    record_t data = RECORD_SET_INIT(record->addr_len, record->type, record->instid, record->warp_v,
-                                    record->ctaid.x, record->ctaid.y, record->ctaid.z,
-                                    record->grid,
-                                    record->warp_p, record->sm,
-                                    record->req_size, record->clock);
-    *buf = data;
-
-    for (uint8_t i = 0; i < record->addr_len; i++) {
-      RECORD_ADDR(buf, i) = record->addr_unit[i].addr;
-      RECORD_ADDR_META(buf, i) = (record->addr_unit[i].offset << 8) | ((int64_t)record->addr_unit[i].count & 0xFF);
-    }
-  }
-
-  void trace_deserialize(record_t* buf, trace_record_t* record) {
-    record->addr_len = RECORD_GET_ALEN(buf);
-    record->type = RECORD_GET_TYPE(buf);
-    record->instid = RECORD_GET_INSTID(buf);
-    record->warp_v = RECORD_GET_WARP_V(buf);
-  
-    record->ctaid.x = RECORD_GET_CTAX(buf);
-    record->ctaid.y = RECORD_GET_CTAY(buf);
-    record->ctaid.z = RECORD_GET_CTAZ(buf);
-    
-    record->grid = RECORD_GET_GRID(buf);
-    
-    record->warp_p = RECORD_GET_WARP_P(buf);
-    record->sm = RECORD_GET_SM(buf);
-    record->req_size = RECORD_GET_REQ_SIZE(buf);
-
-    record->clock = RECORD_GET_CLOCK(buf);
-  
-
-    for (uint8_t i = 0; i < record->addr_len; i++) {
-      record->addr_unit[i].addr = RECORD_ADDR(buf, i);
-      record->addr_unit[i].offset = RECORD_GET_OFFSET(buf, i);
-      record->addr_unit[i].count = RECORD_GET_COUNT(buf, i);
-    }
-  }
-
-
-
-
-
   int trace_next(trace_t* t) {
     uint64_t buf[TRACE_RECORD_SIZE(32)/8+1]; // mem space for addr_len == threads per warp
     // end of file, this is not an error
@@ -344,7 +351,8 @@ extern "C" {
         return 1;
       }
 
-      for (uint64_t i = 0; i < t->kernel_count; i++) {
+      t->kernel_i = 0; // set as unknown first
+      for (uint64_t i = 1; i <= t->kernel_count; i++) {
         if (t->kernel_accdat[i]->kernel_name_len == name_len &&
             memcmp(kernel_name, t->kernel_accdat[i]->kernel_name, name_len) == 0) {
           t->kernel_i = i;
@@ -367,6 +375,11 @@ extern "C" {
       }
     
       trace_deserialize((record_t*)buf, &t->record);
+
+      // if kernel is unknown, set instid to 0
+      if (t->kernel_i == 0)
+        t->record.instid = 0;
+      
       trace_last_error = NULL;
       return 0;
     }
@@ -378,7 +391,7 @@ extern "C" {
 
   void trace_close(trace_t* t) {
 
-    for (uint64_t i = 0; i < t->kernel_count; i++) {
+    for (uint64_t i = 1; i <= t->kernel_count; i++) {
       free(t->kernel_accdat[i]);
     }
     free(t->kernel_accdat);

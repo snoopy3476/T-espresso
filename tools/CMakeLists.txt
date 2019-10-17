@@ -1,4 +1,4 @@
-add_executable(cutracedump cutracedump.c)
+add_executable(cutracedump cutracedump.c ../lib/TraceIO.h ../lib/Common.h)
 
 install(FILES ${LLVM_BINARY_DIR}/bin/cutracedump
   DESTINATION bin

@@ -9,12 +9,12 @@
 namespace llvm {
 
 struct KCall {
-  KCall(CallInst* cc, Instruction* kl, StringRef kn)
-    : configure_call(cc), kernel_launch(kl), kernel_name(kn)
+  KCall(CallInst* inst, Instruction* launch, Function* kernel)
+    : configure_call(inst), kernel_launch(launch), kernel_obj(kernel)
   {}
   CallInst* configure_call;
   Instruction* kernel_launch;
-  std::string kernel_name;
+  Function* kernel_obj;
 };
 
 class LocateKCallsPass : public ModulePass {
@@ -23,9 +23,11 @@ public:
   LocateKCallsPass();
   bool runOnModule(Module& module) override;
   void releaseMemory() override;
-  SmallVector<KCall, 4> getLaunches() const;
+  SmallVector<KCall, 32> getLaunchList() const;
+  SmallVector<Function*, 32> getKernelList() const;
 private:
-  SmallVector<KCall, 4> launches;
+  SmallVector<KCall, 32> launch_list;
+  SmallVector<Function*, 32> kernel_list;
 };
 
 }

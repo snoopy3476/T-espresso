@@ -12,28 +12,30 @@ $1=="K" \
 
 $1=="T" \
 {
-        printf "trace_type=" $1 " op=" $2 " sm=" $3 \
-        " cta_size=" $4 " cta[x]=" $5 " cta[y]=" $6 " cta[z]=" $7 \
-        " warp=" $8 " clock=" $9 "\n";
+        printf "trace_type=" $1 " op=" $2 " grid=" $3 \
+        " cta[x]=" $4 " cta[y]=" $5 " cta[z]=" $6 \
+        " warpv=" $7 " cta_size=" $8 \
+        " sm=" $9 " warpp=" $10 " clock=" $11 "\n";
 }
 
 $1=="M" \
 {
-        printf "trace_type=" $1 " op=" $2 " sm=" $3 \
-        " cta_size=" $4 " cta[x]=" $5 " cta[y]=" $6 " cta[z]=" $7 \
-        " warp=" $8 " clock=" $9 \
-        " req_size=" $10;
+        printf "trace_type=" $1 " op=" $2 " grid=" $3 \
+        " cta[x]=" $4 " cta[y]=" $5 " cta[z]=" $6 \
+        " warpv=" $7 " cta_size=" $8 \
+        " sm=" $9 " warpp=" $10 " clock=" $11 \
+        " req_size=" $12;
 
-        for (i = 11; i < 43; i++)
+        for (i = 13; i < 45; i++)
         {
-                printf " addr[" i-10 "]=" $i;
+                printf " addr[" i-13 "]=" $i;
         }
 
-        printf " inst_id=" $43 " kernel_name=" $44 " inst_line=" $45 " inst_col=" $46;
+        printf " inst_id=" $45 " kernel_name=" $46 " inst_line=" $47 " inst_col=" $48;
 
 
         printf " inst_src=\"";
-        for (i = 47; i < NF; i++)
+        for (i = 49; i < NF; i++)
         {
                 printf $i" ";
         }

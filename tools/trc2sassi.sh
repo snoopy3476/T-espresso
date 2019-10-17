@@ -11,8 +11,8 @@ $1=="K" \
 }
 $1=="M" \
 {
-        printf "warpid " $8 " " $43 " " $4 " ";
-        for (i=11; i < 43; i++)
+        printf "warpid " $7 " " $45 " " $8 " ";
+        for (i=13; i < 45; i++)
         {
                 if ($i != "(blank)") {printf $i " ";}
         }
