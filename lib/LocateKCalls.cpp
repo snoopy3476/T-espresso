@@ -4,14 +4,29 @@
 
 #define DEBUG_TYPE "cuprof-locate-kernel-launches"
 
+#include "compat/LLVM-8.h" // for backward compatibility
+
+#ifndef CUDA_LAUNCH_FUNC_NAME
+#define CUDA_LAUNCH_FUNC_NAME "cudaLaunchKernel"
+#endif
+
+#ifndef CUDA_PUSHCONF_FUNC_NAME
+#define CUDA_PUSHCONF_FUNC_NAME "__cudaPushCallConfiguration"
+#endif
+
+#ifndef CUDA_POPCONF_FUNC_NAME
+#define CUDA_POPCONF_FUNC_NAME "__cudaPopCallConfiguration"
+#endif
+
+
 using namespace llvm;
 
 SmallVector<Function*, 32> findKernels(Module& module) {
   SmallVector<Function*, 32> kernel_list;
   
   Function* func_callee[] = {
-    module.getFunction("__cudaPopCallConfiguration"),
-    module.getFunction("cudaLaunchKernel")
+    module.getFunction(CUDA_POPCONF_FUNC_NAME),
+    module.getFunction(CUDA_LAUNCH_FUNC_NAME)
   };
 
   const int FUNC_COUNT = sizeof(func_callee)/sizeof(*func_callee);
@@ -26,14 +41,18 @@ SmallVector<Function*, 32> findKernels(Module& module) {
       CallInst* callinst_cur = dyn_cast<CallInst>(user);
       Function* func_cur;
       if (callinst_cur && (func_cur = callinst_cur->getCaller())) {
-        caller_list[i].push_back(func_cur);
+        if (std::find(caller_list[i].begin(), caller_list[i].end(), func_cur)
+            == caller_list[i].end())
+          caller_list[i].push_back(func_cur);
       }
     }
 
+    // sort for get common below
     std::sort(caller_list[i].begin(), caller_list[i].end());
   }
 
 
+  
   // filter common elements
   for (int i = 1; i < FUNC_COUNT; i++) {
     std::vector<Function*>::iterator
@@ -54,6 +73,7 @@ SmallVector<Function*, 32> findKernels(Module& module) {
   }
 
 
+
   // insert all common to return value
   for (auto iter = caller_list[0].cbegin();
        iter != caller_list[0].cend();
@@ -62,12 +82,11 @@ SmallVector<Function*, 32> findKernels(Module& module) {
   }
 
   
-  
   return kernel_list;
 }
 
 SmallVector<CallInst*, 32> findConfigureCalls(Module& module) {
-  Function* func = module.getFunction("__cudaPushCallConfiguration");
+  Function* func = module.getFunction(CUDA_PUSHCONF_FUNC_NAME);
   if (func == nullptr) {
     return {};
   }
@@ -132,6 +151,7 @@ Instruction* findLaunchFor(CallInst* configure_call) {
 }
 
 Function* getCalledKernel(Instruction* launch) {
+  if (launch == nullptr) return nullptr;
   Function* callee = nullptr;
   Value* op1 = nullptr;
   CallInst* callinst = dyn_cast<CallInst>(launch);
@@ -151,7 +171,7 @@ Function* getCalledKernel(Instruction* launch) {
       return nullptr;
     }
   }
-  if (callee->hasName() && callee->getName().str().compare("cudaLaunchKernel") != 0) {
+  if (callee->hasName() && callee->getName().str().compare(CUDA_LAUNCH_FUNC_NAME) != 0) {
     return callee;
   } else {
     op1 = op1->stripPointerCasts();
@@ -170,6 +190,7 @@ namespace llvm {
 
   bool LocateKCallsPass::runOnModule(Module& module) {
     launch_list.clear();
+    kernel_list.clear();
     
 
     for (Function* kernel : findKernels(module)) {

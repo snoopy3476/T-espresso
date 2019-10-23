@@ -6,7 +6,6 @@
 
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Operator.h"
-
 #include "llvm/Pass.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/IRBuilder.h"
@@ -18,6 +17,8 @@
 
 #define INCLUDE_LLVM_CUPROF_TRACE_STUFF
 #include "Common.h"
+
+#include "compat/LLVM-8.h" // for backward compatibility
 
 #define DEBUG_TYPE "cuprof-host"
 
@@ -224,9 +225,8 @@ struct InstrumentHostPass : public ModulePass {
 
     // add function
     LLVMContext& ctx = module.getContext();
-    Function* func = dyn_cast<Function>(module.getOrInsertFunction(
-                                          funcname.c_str(),
-                                          Type::getVoidTy(ctx)).getCallee() );
+    FunctionCallee func_callee = module.getOrInsertFunction(funcname.c_str(), void_ty);
+    Function* func = dyn_cast<Function>(func_callee.getCallee());
     if (!func || !func->empty()) return false;
     func->setCallingConv(CallingConv::C);
     
@@ -479,7 +479,7 @@ struct InstrumentHostPass : public ModulePass {
   
   
   bool runOnModule(Module& module) override {
-
+    
     bool is_cuda = module.getTargetTriple().find("nvptx") != std::string::npos;
     if (is_cuda) return false;
 

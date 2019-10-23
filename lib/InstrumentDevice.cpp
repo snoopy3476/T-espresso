@@ -10,7 +10,6 @@
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
-
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
 
@@ -20,6 +19,8 @@
 
 #define INCLUDE_LLVM_CUPROF_TRACE_STUFF
 #include "TraceIO.h"
+
+#include "compat/LLVM-8.h" // for backward compatibility
 
 #define DEBUG_TYPE "cuprof-device"
 #define TRACE_DEBUG_DATA "___cuprof_accdat_instmd"
@@ -79,9 +80,9 @@ struct InstrumentDevicePass : public ModulePass {
   FunctionType* i32_fty = nullptr;
   FunctionType* i64_fty = nullptr;
 
-  FunctionCallee trace_call;
-  FunctionCallee filter_call;
-  FunctionCallee filter_volatile_call;
+  FunctionCallee trace_call = nullptr;
+  FunctionCallee filter_call = nullptr;
+  FunctionCallee filter_volatile_call = nullptr;
 
   
 
