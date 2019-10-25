@@ -16,25 +16,28 @@
 #include "clang/AST/AST.h"
 
 
+
+
 using namespace llvm;
 
-static InstrumentPassArg pass_args = {true, true};
+namespace cuprof {
 
-namespace clang {
+  static InstrumentPassArg pass_args = {true, true};
   
-  class CuprofPluginEntry : public PluginASTAction {
+  class CuprofPluginEntry : public clang::PluginASTAction {
     void anchor() override { }
   protected:
 
 
     // Register pass according to args
-    std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance&, StringRef) override {
-      return make_unique<ASTConsumer>();
+    std::unique_ptr<clang::ASTConsumer>
+    CreateASTConsumer(clang::CompilerInstance&, StringRef) override {
+      return make_unique<clang::ASTConsumer>();
     }
 
     
     // Get args of the plugin
-    bool ParseArgs(const CompilerInstance&,
+    bool ParseArgs(const clang::CompilerInstance&,
                    const std::vector<std::string>& args) override {
       
       pass_args.trace_thread = true;
@@ -168,26 +171,34 @@ namespace clang {
   private:
 
   };
-
   
-  static FrontendPluginRegistry::Add<CuprofPluginEntry>
+  static clang::FrontendPluginRegistry::Add<CuprofPluginEntry>
   X("cuprof", "cuda profiler");
-  
-}
-  
 
 
-static void registerStandardPasses(const PassManagerBuilder&, legacy::PassManagerBase& pm) {
+
+  
+
+  // register passes to be executed automatically
+
+  static void registerStandardPasses(const PassManagerBuilder&,
+                                     legacy::PassManagerBase& pm) {
     
-  pm.add(createMarkAllDeviceForInlinePass());
-  pm.add(createAlwaysInlinerLegacyPass());
-  pm.add(createLinkDeviceSupportPass());
-  pm.add(createInstrumentDevicePass(pass_args));
+    pm.add(createMarkAllDeviceForInlinePass());
+    pm.add(createAlwaysInlinerLegacyPass());
+    pm.add(createLinkDeviceSupportPass());
+    pm.add(createInstrumentDevicePass(pass_args));
 
-  pm.add(createInstrumentHostPass(pass_args));
+    pm.add(createInstrumentHostPass(pass_args));
+  }
+
+  static RegisterStandardPasses RegisterTracePass(
+    PassManagerBuilder::EP_ModuleOptimizerEarly,
+    registerStandardPasses);
+  static RegisterStandardPasses RegisterTracePass0(
+    PassManagerBuilder::EP_EnabledOnOptLevel0,
+    registerStandardPasses);
+  
 }
   
-static RegisterStandardPasses RegisterTracePass(
-  PassManagerBuilder::EP_ModuleOptimizerEarly, registerStandardPasses);
-static RegisterStandardPasses RegisterTracePass0(
-  PassManagerBuilder::EP_EnabledOnOptLevel0, registerStandardPasses);
+

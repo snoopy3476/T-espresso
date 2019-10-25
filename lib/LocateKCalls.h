@@ -6,29 +6,29 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/ADT/SmallVector.h"
 
-namespace llvm {
+namespace cuprof {
 
-struct KCall {
-  KCall(CallInst* inst, Instruction* launch, Function* kernel)
-    : configure_call(inst), kernel_launch(launch), kernel_obj(kernel)
-  {}
-  CallInst* configure_call;
-  Instruction* kernel_launch;
-  Function* kernel_obj;
-};
+  struct KCall {
+    KCall(llvm::CallInst* inst, llvm::Instruction* launch, llvm::Function* kernel)
+      : configure_call(inst), kernel_launch(launch), kernel_obj(kernel)
+      {}
+    llvm::CallInst* configure_call;
+    llvm::Instruction* kernel_launch;
+    llvm::Function* kernel_obj;
+  };
 
-class LocateKCallsPass : public ModulePass {
-public:
-  static char ID;
-  LocateKCallsPass();
-  bool runOnModule(Module& module) override;
-  void releaseMemory() override;
-  SmallVector<KCall, 32> getLaunchList() const;
-  SmallVector<Function*, 32> getKernelList() const;
-private:
-  SmallVector<KCall, 32> launch_list;
-  SmallVector<Function*, 32> kernel_list;
-};
+  class LocateKCallsPass : public llvm::ModulePass {
+  public:
+    static char ID;
+    LocateKCallsPass();
+    bool runOnModule(llvm::Module& module) override;
+    void releaseMemory() override;
+    llvm::SmallVector<KCall, 32> getLaunchList() const;
+    llvm::SmallVector<llvm::Function*, 32> getKernelList() const;
+  private:
+    llvm::SmallVector<KCall, 32> launch_list;
+    llvm::SmallVector<llvm::Function*, 32> kernel_list;
+  };
 
 }
 

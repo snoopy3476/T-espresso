@@ -2,7 +2,7 @@
 
 #include "llvm/Pass.h"
 
-namespace llvm {
+namespace cuprof {
   
   typedef struct InstrumentPassArg {
     bool trace_thread, trace_mem, verbose;
@@ -19,10 +19,10 @@ namespace llvm {
   };
 
   
-  Pass* createMarkAllDeviceForInlinePass();
-  Pass* createLinkDeviceSupportPass();
-  Pass* createInstrumentDevicePass(InstrumentPassArg);
+  llvm::Pass* createMarkAllDeviceForInlinePass();
+  llvm::Pass* createLinkDeviceSupportPass();
+  llvm::Pass* createInstrumentDevicePass(InstrumentPassArg);
 
-  Pass* createLinkHostSupportPass();
-  Pass* createInstrumentHostPass(InstrumentPassArg);
+  llvm::Pass* createLinkHostSupportPass();
+  llvm::Pass* createInstrumentHostPass(InstrumentPassArg);
 }
