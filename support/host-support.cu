@@ -1,5 +1,5 @@
-#include "../lib/Common.h"
-#include "../lib/TraceIO.h"
+#include "../lib/common.h"
+#include "../lib/trace-io.h"
 
 #include <atomic>
 #include <string>
@@ -219,11 +219,7 @@ protected:
     }
 
 
-    // compression mode
-    // mode = 1 : same addresses
-    // mode = 2 : increment addresses
-    //            (before_addr + before_size * before_count = cur_addr)
-    int compression_mode;
+    
     char newrec_orig[TRACE_RECORD_SIZE(32)] = {0};
     trace_record_t* const newrec = (trace_record_t* const) newrec_orig;
 
@@ -235,16 +231,17 @@ protected:
 
       trace_deserialize((record_t*)&records_ptr[i * RECORD_SIZE], newrec);
 
+
+
       
       // if this is the first record, intialize it
       if (acc->addr_unit->count == 0) {
-	memcpy(acc, newrec, sizeof(trace_record_t));
+	memcpy(acc, newrec, TRACE_RECORD_SIZE(1));
         //*acc = *newrec;
 	acc->addr_len = 1;
         acc_addr = &acc->addr_unit[acc->addr_len - 1];
 	acc->addr_unit->count = 1;
 	acc->addr_unit->addr = newrec->addr_unit->addr;
-	compression_mode = 0;
       }
 
       
@@ -257,7 +254,6 @@ protected:
           if ((offset & 0xFFFFFFFFFF000000) == 0 ||
               (offset & 0xFFFFFFFFFF000000) == 0xFFFFFFFFFF000000) {
             acc_addr->offset = (int32_t) (offset & 0xFFFFFFFF);
-            compression_mode = 1;
           }
         }
 
@@ -269,7 +265,7 @@ protected:
 	    newrec->warpv == acc->warpv && newrec->clock == acc->clock) {
 
           // same inst info & addr pattern - increment current addr_unit count
-          if ( (compression_mode == 1 && newrec->addr_unit->addr == acc_addr->addr +
+          if ( (acc_addr->count > 1 && newrec->addr_unit->addr == acc_addr->addr +
                 (acc_addr->offset * acc_addr->count)) ) {
             acc_addr->count += 1;
           }
@@ -280,7 +276,6 @@ protected:
             acc_addr = &acc->addr_unit[acc->addr_len - 1];
             acc_addr->count = 1;
             acc_addr->addr = newrec->addr_unit->addr;
-            compression_mode = 0;
           }
 
         }
@@ -295,11 +290,13 @@ protected:
           acc_addr = &acc->addr_unit[acc->addr_len - 1];
           acc->addr_unit->count = 1;
           acc->addr_unit->addr = newrec->addr_unit->addr;
-          compression_mode = 0;
         }
           
       }
     }
+    
+    trace_write_record(out, acc);
+    acc->addr_unit->count = 0;
 
     *vcommit = 0;
     // ensure commits are reset first

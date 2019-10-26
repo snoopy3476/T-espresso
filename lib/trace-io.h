@@ -7,15 +7,28 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stddef.h>
-#include "Common.h"
+#include "common.h"
+
+
+
+#ifdef __GNUC__
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-function"
+#elif __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunused-function"
+#endif
+
 
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+  
   static const char TRACE_HEADER_PREFIX[] = "__CUPROF_TRACE__";
   static const char TRACE_HEADER_POSTFIX[] = "\0\0\0\0";
+
 
   
   
@@ -75,28 +88,31 @@ extern "C" {
     trace_record_t record;
   } trace_t;
 
-
+  
 
 #define NAME_UNKNOWN "(unknown)"
-  trace_header_kernel_t empty_kernel = {
-    sizeof(NAME_UNKNOWN)+1, NAME_UNKNOWN, 0, {0}
+  static trace_header_kernel_t empty_kernel = {
+    sizeof(NAME_UNKNOWN)+1, NAME_UNKNOWN, 0, {{0}}
   };
   
-  const char* trace_last_error = NULL;
+  static const char* trace_last_error = NULL;
 
-/******************************************************************************
- * reader
- *****************************************************************************/
 
-#define TRACE_RECORD_SIZE(addr_len) \
-  (sizeof(trace_record_t) + sizeof(trace_record_addr_t) * (addr_len))
+  
+/**********
+ * reader *
+ **********/
+  
+#define TRACE_RECORD_SIZE(addr_len)                                     \
+  (sizeof(trace_record_t) + sizeof(trace_record_addr_t) * (addr_len - 1))
 #define CONST_MAX(x, y) ((x) > (y) ? (x) : (y))
 
 
-  
+/**********
+ * reader *
+ **********/
 
-
-  size_t int_serialize(char* buf, size_t byte, uint32_t input) {
+  static size_t int_serialize(char* buf, size_t byte, uint32_t input) {
     
     for (size_t i = 0; i < byte; i++) {
       buf[i] = (uint8_t) (input >> (i * 8)) & 0xFF;
@@ -105,7 +121,7 @@ extern "C" {
     return byte;
   }
   
-  size_t int_deserialize(uint32_t* output, size_t byte, char* buf) {
+  static size_t int_deserialize(uint32_t* output, size_t byte, char* buf) {
     
     uint32_t value = 0;
     for (size_t i = 0; i < byte; i++) {
@@ -117,12 +133,12 @@ extern "C" {
   }
   
 
-  size_t get_max_header_bytes_after_serialize(trace_header_kernel_t* kernel_header) {
+  static size_t get_max_header_bytes_after_serialize(trace_header_kernel_t* kernel_header) {
     return 4 + 1 + 4 + 256 + kernel_header->insts_count * (1 + 4 + 4 + 4 + 256);
   }
 
   
-  size_t header_serialize(char* buf, trace_header_kernel_t* kernel_header) {
+  static size_t header_serialize(char* buf, trace_header_kernel_t* kernel_header) {
 
     // build header byte data
     if (!buf || !kernel_header) {
@@ -137,7 +153,9 @@ extern "C" {
     buf[offset++] = kernel_header->kernel_name_len; // kernel name length
     offset += int_serialize(buf + offset, 4, kernel_header->insts_count); // inst count
     
-    memcpy(buf + offset, kernel_header->kernel_name, kernel_header->kernel_name_len); // kernel name
+    memcpy(buf + offset,
+           kernel_header->kernel_name,
+           kernel_header->kernel_name_len); // kernel name
     offset += kernel_header->kernel_name_len;
 
     
@@ -150,7 +168,9 @@ extern "C" {
       offset += int_serialize(buf + offset, 4, inst_header->row); // inst row in file
       offset += int_serialize(buf + offset, 4, inst_header->col); // inst col in file
       
-      memcpy(buf + offset, inst_header->inst_filename, inst_header->inst_filename_len); // inst filename
+      memcpy(buf + offset,
+             inst_header->inst_filename,
+             inst_header->inst_filename_len); // inst filename
       offset += inst_header->inst_filename_len;
 
     }
@@ -159,13 +179,13 @@ extern "C" {
   }
 
 
-  size_t get_kernel_header_bytes_after_deserialize(char* buf) {
+  static size_t get_kernel_header_bytes_after_deserialize(char* buf) {
     uint32_t count;
     int_deserialize(&count, 4, buf + 5); // inst count
     return sizeof(trace_header_kernel_t) + (sizeof(trace_header_inst_t) * (count));
   }
 
-  size_t header_deserialize(trace_header_kernel_t* kernel_header, char* serialized_data) {
+  static size_t header_deserialize(trace_header_kernel_t* kernel_header, char* serialized_data) {
     
     if (!kernel_header || !serialized_data) {
       fprintf(stderr, "cuprof: Failed to deserialize kernel header!\n");
@@ -179,9 +199,12 @@ extern "C" {
     // kernel info
     offset += int_deserialize(&value, 4, serialized_data + offset); // kernel placeholder
     kernel_header->kernel_name_len = serialized_data[offset++]; // kernel name length
-    offset += int_deserialize(&kernel_header->insts_count, 4, serialized_data + offset); // inst count
+    offset += int_deserialize(&kernel_header->insts_count, 4,
+                              serialized_data + offset); // inst count
     
-    memcpy(kernel_header->kernel_name, serialized_data + offset, kernel_header->kernel_name_len); // kernel name
+    memcpy(kernel_header->kernel_name,
+           serialized_data + offset,
+           kernel_header->kernel_name_len); // kernel name
     offset += kernel_header->kernel_name_len;
 
     
@@ -190,11 +213,16 @@ extern "C" {
       trace_header_inst_t* inst_header = &kernel_header->insts[i];
       
       inst_header->inst_filename_len = serialized_data[offset++]; // inst filename length
-      offset += int_deserialize(&inst_header->instid, 4, serialized_data + offset); // inst id of kernelcallheader
-      offset += int_deserialize(&inst_header->row, 4, serialized_data + offset); // inst row in file
-      offset += int_deserialize(&inst_header->col, 4, serialized_data + offset); // inst col in file
+      offset += int_deserialize(&inst_header->instid, 4,
+                                serialized_data + offset); // inst id in kernel
+      offset += int_deserialize(&inst_header->row, 4,
+                                serialized_data + offset); // inst row in file
+      offset += int_deserialize(&inst_header->col, 4,
+                                serialized_data + offset); // inst col in file
       
-      memcpy(inst_header->inst_filename, serialized_data + offset, inst_header->inst_filename_len); // inst filename
+      memcpy(inst_header->inst_filename,
+             serialized_data + offset,
+             inst_header->inst_filename_len); // inst filename
       offset += inst_header->inst_filename_len;
 
       if (i != inst_header->instid) {
@@ -210,25 +238,27 @@ extern "C" {
 
 
 
-  void trace_serialize(trace_record_t* record, record_t* buf) {
+  static void trace_serialize(trace_record_t* record, record_t* buf) {
     
     record_t data = {
-      RECORD_SET_INIT(record->addr_len, record->type, record->instid, record->warpv,
+      RECORD_SET_INIT(record->addr_len, record->type,
+                      record->instid, record->warpv,
                       record->ctaid.x, record->ctaid.y, record->ctaid.z,
                       record->grid,
-                      record->warpp, record->sm,
-                      record->req_size, record->clock)
+                      record->req_size, record->clock,
+                      record->warpp, record->sm)
     };
     *buf = data;
 
     for (uint8_t i = 0; i < record->addr_len; i++) {
       RECORD_ADDR(buf, i) = record->addr_unit[i].addr;
       RECORD_ADDR_META(buf, i) =
-        (record->addr_unit[i].offset << 8) | ((int64_t)record->addr_unit[i].count & 0xFF);
+        (record->addr_unit[i].offset << 8) |
+        ((int64_t)record->addr_unit[i].count & 0xFF);
     }
   }
 
-  void trace_deserialize(record_t* buf, trace_record_t* record) {
+  static void trace_deserialize(record_t* buf, trace_record_t* record) {
     record->addr_len = RECORD_GET_ALEN(buf);
     record->type = RECORD_GET_TYPE(buf);
     record->instid = RECORD_GET_INSTID(buf);
@@ -240,11 +270,11 @@ extern "C" {
     
     record->grid = RECORD_GET_GRID(buf);
     
+    record->req_size = RECORD_GET_REQ_SIZE(buf);
+    record->clock = RECORD_GET_CLOCK(buf);
+    
     record->warpp = RECORD_GET_WARP_P(buf);
     record->sm = RECORD_GET_SM(buf);
-    record->req_size = RECORD_GET_REQ_SIZE(buf);
-
-    record->clock = RECORD_GET_CLOCK(buf);
   
 
     for (uint8_t i = 0; i < record->addr_len; i++) {
@@ -256,8 +286,9 @@ extern "C" {
 
 
   
-  trace_t* trace_open(FILE* f) {
-    char delim_buf[CONST_MAX(sizeof(TRACE_HEADER_PREFIX), sizeof(TRACE_HEADER_POSTFIX) + 5)];
+  static trace_t* trace_open(FILE* f) {
+    char delim_buf[CONST_MAX(sizeof(TRACE_HEADER_PREFIX),
+                             sizeof(TRACE_HEADER_POSTFIX) + 5)];
 
     // check trace header prefix    
     if (fread(delim_buf, sizeof(TRACE_HEADER_PREFIX), 1, f) < 1 &&
@@ -330,7 +361,7 @@ extern "C" {
   }
 
 
-  int trace_next(trace_t* t) {
+  static int trace_next(trace_t* t) {
     uint64_t buf[TRACE_RECORD_SIZE(32)/8+1]; // mem space for addr_len == threads per warp
     // end of file, this is not an error
     if (fread(buf, 8 * sizeof(char), 1, t->file) != 1) {
@@ -385,11 +416,11 @@ extern "C" {
     }
   }
 
-  int trace_eof(trace_t* t) {
+  static int trace_eof(trace_t* t) {
     return feof(t->file);
   }
 
-  void trace_close(trace_t* t) {
+  static void trace_close(trace_t* t) {
 
     for (uint64_t i = 1; i <= t->kernel_count; i++) {
       free(t->kernel_accdat[i]);
@@ -404,11 +435,11 @@ extern "C" {
 
   
 
-/******************************************************************************
- * writer
- *****************************************************************************/
+/**********
+ * writer *
+ **********/
 
-  int trace_write_header(FILE* f, const char* accdat, uint64_t accdat_len) {
+  static int trace_write_header(FILE* f, const char* accdat, uint64_t accdat_len) {
   
     if (fwrite(TRACE_HEADER_PREFIX, sizeof(TRACE_HEADER_PREFIX), 1, f) < 1) {
       trace_last_error = "header prefix write error";
@@ -436,8 +467,8 @@ extern "C" {
     return 0;
   }
 
-  int trace_write_kernel(FILE* f, const char* name, uint16_t cta_size) {
-    uint8_t name_len = strnlen(name, 0xFF) & 0xFF;
+  static int trace_write_kernel(FILE* f, const char* name, uint16_t cta_size) {
+    uint8_t name_len = strlen(name) & 0xFF;
     uint64_t header = ((uint64_t)name_len << 48) | ((uint64_t)cta_size << 32);
   
     if (fwrite(&header, 8, 1, f) < 1) {
@@ -453,7 +484,7 @@ extern "C" {
     return 0;
   }
 
-  int trace_write_record(FILE* f, trace_record_t* record) {
+  static int trace_write_record(FILE* f, trace_record_t* record) {
   
     char buf[TRACE_RECORD_SIZE(32)]; // mem space for addr_len == threads per warp
     trace_serialize(record, (record_t*)buf);
@@ -467,10 +498,21 @@ extern "C" {
 
 
 
-
   
 #ifdef __cplusplus
 }
 #endif
+
+
+
+
+#ifdef __GNUC__
+#pragma GCC diagnostic pop
+#elif __clang__
+#pragma clang diagnostic pop
+#endif
+
+
+
 
 #endif

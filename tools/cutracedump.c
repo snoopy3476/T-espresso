@@ -19,14 +19,14 @@
 
 #define WARP_SIZE 32
 
-#include "../lib/TraceIO.h"
+#include "../lib/trace-io.h"
 
 #ifndef __STDC_FORMAT_MACROS
 #define __STDC_FORMAT_MACROS
 #endif
 #include <inttypes.h>
-
 #include <stdio.h>
+#include <stdlib.h>
 
 #define die(...) do {                           \
     printf(__VA_ARGS__);                        \
@@ -74,7 +74,7 @@ int main(int argc, char** argv) {
   }
 
   
-  int quiet = getenv("QUIET") != NULL;
+  int quiet = (int) (getenv("QUIET") != NULL);
 
   trace_t* trace = trace_open(input);
 

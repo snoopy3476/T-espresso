@@ -1,4 +1,5 @@
-#pragma once
+#ifndef __PASSES_H__
+#define __PASSES_H__
 
 #include "llvm/Pass.h"
 
@@ -26,3 +27,6 @@ namespace cuprof {
   llvm::Pass* createLinkHostSupportPass();
   llvm::Pass* createInstrumentHostPass(InstrumentPassArg);
 }
+
+
+#endif

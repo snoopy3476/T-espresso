@@ -8,10 +8,12 @@ add_llvm_library(libcuprof MODULE
   InstrumentHost.cpp
   RegisterStandardPasses.cpp
 
-  Common.h
+  PassCommon.h
   LocateKCalls.h
   Passes.h
-  TraceIO.h
+  
+  common.h
+  trace-io.h
   )
 add_dependencies(libcuprof
   cuprofdevice
@@ -43,6 +45,3 @@ else ()
     clangTooling
     )
 endif()
-
-install(FILES ${CUPROF_SOURCE_DIR}/lib/TraceIO.h
-  DESTINATION include)

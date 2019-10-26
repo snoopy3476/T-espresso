@@ -1,5 +1,3 @@
-#include "Passes.h"
-
 #include "llvm/Pass.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/raw_ostream.h"
@@ -17,8 +15,10 @@
 #include <iostream>
 #include <fstream>
 
-#define INCLUDE_LLVM_CUPROF_TRACE_STUFF
-#include "TraceIO.h"
+#include "common.h"
+#include "trace-io.h"
+#include "PassCommon.h"
+#include "Passes.h"
 
 #include "compat/LLVM-8.h" // for backward compatibility
 
@@ -441,32 +441,6 @@ namespace cuprof {
       return std::vector<Function*>(kernels.begin(), kernels.end());
     }
 
-    bool isKernelToBeTraced(Function* kernel) {
-
-      const std::string kernel_name_sym = kernel->getName().str();
-      DISubprogram* kernel_debuginfo = kernel->getSubprogram();
-      std::string kernel_name_orig;
-      if (kernel_debuginfo) {
-        kernel_name_orig = kernel_debuginfo->getName().str();
-      }
-
-      // stop instrumenting if not listed on enabled kernel
-      if (std::find(args.kernel.begin(),
-                    args.kernel.end(),
-                    kernel_name_sym) == args.kernel.end() &&
-          std::find(args.kernel.begin(),
-                    args.kernel.end(),
-                    kernel_name_orig) == args.kernel.end()) {
-        return false;
-      }
-        
-      //fprintf(stderr, "cuprof: Selective kernel tracing enabled (%s)\n",
-      //        kernel_name_sym.c_str());
-
-      return true;
-    }
-
-  
     enum PointerKind {
       PK_OTHER = 0,
       PK_GLOBAL,
@@ -864,7 +838,7 @@ namespace cuprof {
 
       
         // kernel filtering
-        if (kernel_filtering && !isKernelToBeTraced(kernel))
+        if (kernel_filtering && !isKernelToBeTraced(kernel, args.kernel))
           continue;
 
 

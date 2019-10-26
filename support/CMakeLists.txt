@@ -8,21 +8,18 @@ message(STATUS "Using CUPROF_CUDA_FLAGS:" ${CUPROF_CUDA_FLAGS})
 
 
 add_custom_command(OUTPUT "${LLVM_BINARY_DIR}/lib/libcuprofhost.a"
-  COMMAND bin/clang++
+  COMMAND "${LLVM_BINARY_DIR}/bin/clang++"
     -std=c++11 --cuda-host-only -c -O2
     ${CUPROF_CUDA_FLAGS}
-    -o lib/libcuprofhost.o
+    -o host-support.o
     "${CMAKE_CURRENT_SOURCE_DIR}/host-support.cu"
     &&
-    bin/llvm-ar
-    rc lib/libcuprofhost.a
-    lib/libcuprofhost.o
-    &&
-    rm lib/libcuprofhost.o
+    "${LLVM_BINARY_DIR}/bin/llvm-ar"
+    rc "${LLVM_BINARY_DIR}/lib/libcuprofhost.a"
+    host-support.o
     
-  
-  WORKING_DIRECTORY "${LLVM_BINARY_DIR}"
-  DEPENDS host-support.cu ../lib/Common.h clang llvm-ar
+  WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/cuprofhost.dir"
+  DEPENDS host-support.cu ../lib/trace-io.h ../lib/common.h clang llvm-ar
   VERBATIM
   )
 add_custom_target(cuprofhost
@@ -50,11 +47,10 @@ add_custom_command(OUTPUT "${LLVM_BINARY_DIR}/include/cuprofdevice.h"
     rm -f lib/cuprofdevice.bc
     
   WORKING_DIRECTORY "${LLVM_BINARY_DIR}"
-  DEPENDS device-support.cu ../lib/Common.h clang
+  DEPENDS device-support.cu ../lib/common.h clang
   VERBATIM
   )
 add_custom_target(cuprofdevice DEPENDS
   "${LLVM_BINARY_DIR}/include/cuprofdevice.h"
   )
-#install(FILES ${LLVM_BINARY_DIR}/lib/cuprofdevice.bc
-#  DESTINATION lib)
+

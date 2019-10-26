@@ -1,4 +1,4 @@
-#include "../lib/Common.h"
+#include "../lib/common.h"
 #define FULL_MASK 0xFFFFFFFF
 
 
@@ -15,7 +15,7 @@ extern "C" {
                                   uint64_t addr, uint64_t ctaid_serial,
                                   uint32_t instid, uint32_t warpv,
                                   uint32_t sm, uint32_t warpp,
-                                  uint16_t acc_size, uint8_t type) {
+                                  uint16_t req_size, uint8_t type) {
     uint64_t clock;
     asm volatile ("mov.u64 %0, %%clock64;" : "=l"(clock));
     
@@ -55,7 +55,7 @@ extern "C" {
     record_t* record = (record_t*) &(records[(record_offset) * RECORD_SIZE]);
 
     *record = (record_t) RECORD_SET_INIT_OPT(1, type, instid, warpv, ctaid_serial,
-                                             grid, warpp, sm, acc_size, clock);
+                                             grid, req_size, clock, warpp, sm);
     RECORD_ADDR(record, 0) = addr;
     RECORD_ADDR_META(record, 0) = 1;
     
