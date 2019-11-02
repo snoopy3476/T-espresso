@@ -185,9 +185,9 @@ extern "C" {
     return sizeof(trace_header_kernel_t) + (sizeof(trace_header_inst_t) * (count));
   }
 
-  static size_t header_deserialize(trace_header_kernel_t* kernel_header, char* serialized_data) {
+  static size_t header_deserialize(trace_header_kernel_t* kernel_header, char* serial_data) {
     
-    if (!kernel_header || !serialized_data) {
+    if (!kernel_header || !serial_data) {
       fprintf(stderr, "cuprof: Failed to deserialize kernel header!\n");
       abort();
     }
@@ -197,31 +197,36 @@ extern "C" {
     size_t offset = 0;
 
     // kernel info
-    offset += int_deserialize(&value, 4, serialized_data + offset); // kernel placeholder
-    kernel_header->kernel_name_len = serialized_data[offset++]; // kernel name length
-    offset += int_deserialize(&kernel_header->insts_count, 4,
-                              serialized_data + offset); // inst count
+    {
+      // kernel placeholder
+      offset += int_deserialize(&value, 4, serial_data + offset);
+      // kernel name length
+      kernel_header->kernel_name_len = serial_data[offset++];
+      // inst count
+      offset += int_deserialize(&kernel_header->insts_count, 4,
+                                serial_data + offset); 
     
-    memcpy(kernel_header->kernel_name,
-           serialized_data + offset,
-           kernel_header->kernel_name_len); // kernel name
-    offset += kernel_header->kernel_name_len;
-
+      memcpy(kernel_header->kernel_name,
+             serial_data + offset,
+             kernel_header->kernel_name_len); // kernel name
+      offset += kernel_header->kernel_name_len;
+    }
     
     // inst info
     for (uint32_t i = 1; i <= kernel_header->insts_count; i++) {
       trace_header_inst_t* inst_header = &kernel_header->insts[i];
-      
-      inst_header->inst_filename_len = serialized_data[offset++]; // inst filename length
-      offset += int_deserialize(&inst_header->instid, 4,
-                                serialized_data + offset); // inst id in kernel
-      offset += int_deserialize(&inst_header->row, 4,
-                                serialized_data + offset); // inst row in file
-      offset += int_deserialize(&inst_header->col, 4,
-                                serialized_data + offset); // inst col in file
+
+      // inst filename length
+      inst_header->inst_filename_len = serial_data[offset++];
+      // inst id in kernel
+      offset += int_deserialize(&inst_header->instid, 4, serial_data + offset);
+      // inst row in file
+      offset += int_deserialize(&inst_header->row, 4, serial_data + offset);
+      // inst col in file
+      offset += int_deserialize(&inst_header->col, 4, serial_data + offset);
       
       memcpy(inst_header->inst_filename,
-             serialized_data + offset,
+             serial_data + offset,
              inst_header->inst_filename_len); // inst filename
       offset += inst_header->inst_filename_len;
 
@@ -240,14 +245,14 @@ extern "C" {
 
   static void trace_serialize(trace_record_t* record, record_t* buf) {
     
-    record_t data = {
-      RECORD_SET_INIT(record->addr_len, record->type,
-                      record->instid, record->warpv,
-                      record->ctaid.x, record->ctaid.y, record->ctaid.z,
-                      record->grid,
-                      record->req_size, record->clock,
-                      record->warpp, record->sm)
-    };
+    record_t data = RECORD_SET_INIT(
+      record->addr_len, record->type,
+      record->instid, record->warpv,
+      record->ctaid.x, record->ctaid.y, record->ctaid.z,
+      record->grid,
+      record->req_size, record->clock,
+      record->warpp, record->sm
+      );
     *buf = data;
 
     for (uint8_t i = 0; i < record->addr_len; i++) {
@@ -277,10 +282,20 @@ extern "C" {
     record->sm = RECORD_GET_SM(buf);
   
 
-    for (uint8_t i = 0; i < record->addr_len; i++) {
-      record->addr_unit[i].addr = RECORD_ADDR(buf, i);
-      record->addr_unit[i].offset = RECORD_GET_OFFSET(buf, i);
-      record->addr_unit[i].count = RECORD_GET_COUNT(buf, i);
+    if (record->addr_len > 0) {
+      for (uint8_t i = 0; i < record->addr_len; i++) {
+        record->addr_unit[i].addr = RECORD_ADDR(buf, i);
+        record->addr_unit[i].offset = RECORD_GET_OFFSET(buf, i);
+        record->addr_unit[i].count = RECORD_GET_COUNT(buf, i);
+      }
+    }
+    else {
+      record->addr_len = 32;
+      for (uint8_t i = 0; i < record->addr_len; i++) {
+        record->addr_unit[i].addr = WARP_RECORD_ADDR(buf, i);
+        record->addr_unit[i].offset = 0;
+        record->addr_unit[i].count = 1;
+      }
     }
   }
 

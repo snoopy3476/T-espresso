@@ -1,5 +1,6 @@
 #include "../lib/common.h"
 #define FULL_MASK 0xFFFFFFFF
+#define I32_MAX 0xFFFFFFFF
 
 
 extern "C" {
@@ -33,37 +34,48 @@ extern "C" {
 
     volatile uint32_t* valloc = (uint32_t*) allocs;
     volatile uint32_t* vcommit = (uint32_t*) commits;
-    unsigned int id = 0;
+    uint32_t rec_offset = I32_MAX;
     
     
-    // slot allocation
+    // allocate space in slot
     if (laneid == lowest) {
-      while(*valloc > (SLOTS_SIZE - 32) ||
-            (id = atomicAdd((uint32_t*)allocs, n_active)) > (SLOTS_SIZE - 32)) {
 
-        // if slot is over-allocated, cancel allocation and wait for flush
-        if (id) {
-          atomicSub((uint32_t*)allocs, n_active);
-          id = 0;
+      // try to allocate until valid
+      while(*valloc >= SLOTS_SIZE ||
+            (rec_offset = atomicInc((uint32_t*)allocs, I32_MAX)) >= SLOTS_SIZE) {
+
+        // if slot is over-allocated (not valid),
+        // cancel the allocation and wait for flush
+        if (rec_offset != I32_MAX) {
+          atomicDec((uint32_t*)allocs, I32_MAX);
+          rec_offset = I32_MAX;
         }
       }
+
+      // write header at lowest lane
+      record_header_t* rec_header =
+        (record_header_t*) &(records[rec_offset * RECORD_SIZE]);
+      *rec_header =
+        (record_header_t) RECORD_SET_INIT_OPT(0, type, instid, warpv,
+                                              ctaid_serial,
+                                              grid,
+                                              req_size, clock,
+                                              warpp, sm);
     }
 
 
-    // record write
-    uint32_t record_offset = __shfl_sync(FULL_MASK, id, lowest) + rlaneid;
-    record_t* record = (record_t*) &(records[(record_offset) * RECORD_SIZE]);
+    // write requested addr for each lane
+    rec_offset = __shfl_sync(FULL_MASK, rec_offset, lowest);
+    uint64_t* rec_addr = (uint64_t*) &(records[(rec_offset) * RECORD_SIZE +
+                                               WARP_RECORD_RAW_SIZE(laneid)]);
+    *rec_addr = addr;
 
-    *record = (record_t) RECORD_SET_INIT_OPT(1, type, instid, warpv, ctaid_serial,
-                                             grid, req_size, clock, warpp, sm);
-    RECORD_ADDR(record, 0) = addr;
-    RECORD_ADDR_META(record, 0) = 1;
-    
+    // guarantee all writes before to be written to the 'records'
     __threadfence_system();
 
 
-    // slot commit
-    if (laneid == lowest) atomicAdd((uint32_t*)commits, n_active);
+    // commit space in slot
+    if (laneid == lowest) atomicInc((uint32_t*)commits, I32_MAX);
   }
 
   

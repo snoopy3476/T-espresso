@@ -209,97 +209,70 @@ protected:
     volatile uint32_t* vcommit = (uint32_t*)commit_ptr;
     volatile uint32_t* valloc = (uint32_t*)alloc_ptr;
 
-    
-    // flush only if kernel is not active,
+    // flush only if kernel is not active and there are records to write,
     // or kernel is active but slot is full and all allocs are committed (no writes anymore)
-    uint32_t records_count = *vcommit;
-    if (is_kernel_active &&
-        (records_count <= SLOTS_SIZE - 32 || records_count != *valloc)) {
-      return 1;
+    uint32_t rec_count = *vcommit;
+
+    
+    if (is_kernel_active) {
+      if (! (rec_count >= SLOTS_SIZE && rec_count == *valloc))
+        return 1;
+    } else {
+      if (rec_count == 0)
+        return 1;
     }
-
-
     
-    char newrec_orig[TRACE_RECORD_SIZE(32)] = {0};
-    trace_record_t* const newrec = (trace_record_t* const) newrec_orig;
-
     
-    trace_record_addr_t* acc_addr;
-    // we know writing from the gpu stopped, so we avoid using the volatile
-    // reference in the end condition
-    for (int32_t i = 0; i < records_count; ++i) {
+    static char rec_orig[TRACE_RECORD_SIZE(32)];
+    trace_record_t* const rec = (trace_record_t* const) rec_orig;
+    
+    
+    trace_record_addr_t* addr_unit_cur;
+    
+    for (int32_t i = 0; i < rec_count; ++i) {
 
-      trace_deserialize((record_t*)&records_ptr[i * RECORD_SIZE], newrec);
+      trace_deserialize((record_t*)&records_ptr[i * RECORD_SIZE], rec);
 
+      rec->addr_len = 1;
+      addr_unit_cur = rec->addr_unit;
 
+      // lane 0 is already set, so starts with lane 1
+      for (int32_t lane = 1; lane < 32; lane++) {
 
-      
-      // if this is the first record, intialize it
-      if (acc->addr_unit->count == 0) {
-	memcpy(acc, newrec, TRACE_RECORD_SIZE(1));
-        //*acc = *newrec;
-	acc->addr_len = 1;
-        acc_addr = &acc->addr_unit[acc->addr_len - 1];
-	acc->addr_unit->count = 1;
-	acc->addr_unit->addr = newrec->addr_unit->addr;
-      }
-
-      
-      // otherwise see if we can increment or have to flush
-      else {
-
-        // set compression info on second record of the addr_unit
-        if (acc_addr->count == 1) {
-          int64_t offset = (int64_t)newrec->addr_unit->addr - (int64_t)acc_addr->addr;
-          if ((offset & 0xFFFFFFFFFF000000) == 0 ||
+        uint64_t addr_new = rec->addr_unit[lane].addr;
+        
+        // set offset
+        if (addr_unit_cur->count == 1) {
+          int64_t offset = (int64_t) addr_new - addr_unit_cur->addr;
+          if ((offset & 0xFFFFFFFFFF000000) == 0x0 ||
               (offset & 0xFFFFFFFFFF000000) == 0xFFFFFFFFFF000000) {
-            acc_addr->offset = (int32_t) (offset & 0xFFFFFFFF);
+            addr_unit_cur->offset = (int32_t) (offset & 0xFFFFFFFF);
           }
         }
 
-
-        // if same inst info with the record before - to be compressed
-        if (newrec->type == acc->type && newrec->req_size == acc->req_size &&
-	    newrec->grid == acc->grid && newrec->ctaid.x == acc->ctaid.x &&
-	    newrec->ctaid.y == acc->ctaid.y && newrec->ctaid.z == acc->ctaid.z &&
-	    newrec->warpv == acc->warpv && newrec->clock == acc->clock) {
-
-          // same inst info & addr pattern - increment current addr_unit count
-          if ( (acc_addr->count > 1 && newrec->addr_unit->addr == acc_addr->addr +
-                (acc_addr->offset * acc_addr->count)) ) {
-            acc_addr->count += 1;
-          }
-
-          // same inst info but new addr pattern - add new addr_unit
-          else {
-            acc->addr_len += 1;
-            acc_addr = &acc->addr_unit[acc->addr_len - 1];
-            acc_addr->count = 1;
-            acc_addr->addr = newrec->addr_unit->addr;
-          }
-
+        // same offset - increment current addr_unit count
+        if (addr_new == addr_unit_cur->addr +
+            (addr_unit_cur->offset * addr_unit_cur->count)) {
+          addr_unit_cur->count += 1;
         }
 
-
-        // if different inst info - add new inst info
+        // different offset - add new addr_unit
         else {
-          trace_write_record(out, acc);
-          
-          memcpy(acc, newrec, TRACE_RECORD_SIZE(1));
-          acc->addr_len = 1;
-          acc_addr = &acc->addr_unit[acc->addr_len - 1];
-          acc->addr_unit->count = 1;
-          acc->addr_unit->addr = newrec->addr_unit->addr;
+          rec->addr_len += 1;
+          addr_unit_cur = &rec->addr_unit[rec->addr_len - 1];
+          addr_unit_cur->count = 1;
+          addr_unit_cur->addr = addr_new;
         }
-          
+ 
       }
+      
+      
+      trace_write_record(out, rec);
     }
     
-    trace_write_record(out, acc);
-    acc->addr_unit->count = 0;
-
+    memset(records_ptr, 0, SLOTS_SIZE * RECORD_SIZE);
     *vcommit = 0;
-    // ensure commits are reset first
+    // ensure records and commits are reset first
     std::atomic_thread_fence(std::memory_order_release);
     *valloc = 0;
 
