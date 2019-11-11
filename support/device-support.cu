@@ -59,8 +59,8 @@ extern "C" {
         (record_header_t) RECORD_SET_INIT_OPT(0, type, instid, warpv,
                                               ctaid_serial,
                                               grid,
-                                              req_size, clock,
-                                              warpp, sm);
+                                              warpp, sm,
+                                              req_size, clock);
     }
 
 

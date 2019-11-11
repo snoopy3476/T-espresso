@@ -64,16 +64,16 @@ extern "C" {
   
 #define RECORD_GET_GRID(record)                 \
   (((uint64_t*)record)[2])
-  
-#define RECORD_GET_REQ_SIZE(record)             \
-  ((((uint64_t*)record)[3] >> 48) & 0xFFFF)
-#define RECORD_GET_CLOCK(record)                \
-  (((uint64_t*)record)[3] & 0xFFFFFFFFFFFF)
 
 #define RECORD_GET_WARP_P(record)               \
-  (((uint64_t*)record)[4] >> 32)
+  (((uint64_t*)record)[3] >> 32)
 #define RECORD_GET_SM(record)                   \
-  (((uint64_t*)record)[4] & 0xFFFFFFFF)
+  (((uint64_t*)record)[3] & 0xFFFFFFFF)
+  
+#define RECORD_GET_REQ_SIZE(record)             \
+  ((((uint64_t*)record)[4] >> 48) & 0xFFFF)
+#define RECORD_GET_CLOCK(record)                \
+  (((uint64_t*)record)[4] & 0xFFFFFFFFFFFF)
   
   
 #define RECORD_ADDR_PTR(record, idx)            \
@@ -105,40 +105,40 @@ extern "C" {
   ((uint64_t)(cta))
 #define RECORD_SET_INIT_IDX_2(grid)             \
   ((uint64_t)(grid))
-#define RECORD_SET_INIT_IDX_3(req_size, clock)  \
-  ((((uint64_t)(req_size) & 0xFFFF) << 48) |    \
-   (((uint64_t)(clock)) & 0xFFFFFFFFFFFF))
-#define RECORD_SET_INIT_IDX_4(warpp, sm)        \
+#define RECORD_SET_INIT_IDX_3(warpp, sm)        \
   ((((uint64_t)(warpp)) << 32) |                \
    ((uint64_t)(sm) & 0xFFFFFFFF))
+#define RECORD_SET_INIT_IDX_4(req_size, clock)  \
+  ((((uint64_t)(req_size) & 0xFFFF) << 48) |    \
+   (((uint64_t)(clock)) & 0xFFFFFFFFFFFF))
   
 
 #define RECORD_SET_INIT_OPT(addr_len, type, instid, warpv,      \
                             cta,                                \
                             grid,                               \
-                            req_size, clock,                    \
-                            warpp, sm)                          \
+                            warpp, sm,                          \
+                            req_size, clock)                    \
   {                                                             \
     RECORD_SET_INIT_IDX_0(addr_len, type, instid, warpv),       \
       RECORD_SET_INIT_IDX_1(cta),                               \
       RECORD_SET_INIT_IDX_2(grid),                              \
-      RECORD_SET_INIT_IDX_3(req_size, clock),                   \
-      RECORD_SET_INIT_IDX_4(warpp, sm)                          \
+      RECORD_SET_INIT_IDX_3(warpp, sm),                         \
+      RECORD_SET_INIT_IDX_4(req_size, clock)                    \
       }
 
 
 #define RECORD_SET_INIT(addr_len, type, instid, warpv,          \
                         cta_x, cta_y, cta_z,                    \
                         grid,                                   \
-                        req_size, clock,                        \
-                        warpp, sm)                              \
+                        warpp, sm,                              \
+                        req_size, clock)                        \
   RECORD_SET_INIT_OPT(addr_len, type, instid, warpv,            \
                       (((uint64_t)(cta_x)) << 32) |             \
                       (((uint64_t)(cta_y) & 0xFFFF) << 16) |    \
                       ((uint64_t)(cta_z) & 0xFFFF),             \
                       grid,                                     \
-                      req_size, clock,                          \
-                      warpp, sm)
+                      warpp, sm,                                \
+                      req_size, clock)
 
 
   typedef struct record_header_t {

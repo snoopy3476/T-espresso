@@ -250,8 +250,8 @@ extern "C" {
       record->instid, record->warpv,
       record->ctaid.x, record->ctaid.y, record->ctaid.z,
       record->grid,
-      record->req_size, record->clock,
-      record->warpp, record->sm
+      record->warpp, record->sm,
+      record->req_size, record->clock
       );
     *buf = data;
 
@@ -275,12 +275,12 @@ extern "C" {
     
     record->grid = RECORD_GET_GRID(buf);
     
+    record->warpp = RECORD_GET_WARP_P(buf);
+    record->sm = RECORD_GET_SM(buf);
+    
     record->req_size = RECORD_GET_REQ_SIZE(buf);
     record->clock = RECORD_GET_CLOCK(buf);
     
-    record->warpp = RECORD_GET_WARP_P(buf);
-    record->sm = RECORD_GET_SM(buf);
-  
 
     if (record->addr_len > 0) {
       for (uint8_t i = 0; i < record->addr_len; i++) {
