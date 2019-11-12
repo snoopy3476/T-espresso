@@ -112,7 +112,7 @@ namespace cuprof {
       trc_touch = module.getOrInsertFunction("__trace_touch",
                                              void_ty, i8p_ty);
       trc_start = module.getOrInsertFunction("__trace_start",
-                                             void_ty, i8p_ty, i8p_ty, i16_ty);
+                                             void_ty, i8p_ty, i8p_ty, i64_ty, i16_ty);
       trc_stop = module.getOrInsertFunction("__trace_stop",
                                             void_ty, i8p_ty);
     
@@ -402,26 +402,40 @@ namespace cuprof {
 
       // Thread block size of the current kernel call
       
+      Instruction::CastOps castop_i32_i64 = CastInst::getCastOpcode(
+        Constant::getNullValue(i32_ty), false, i64_ty, false);
       Instruction::CastOps castop_i64_i16 = CastInst::getCastOpcode(
         Constant::getNullValue(i64_ty), false, i16_ty, false);
       Instruction::CastOps castop_i32_i16 = CastInst::getCastOpcode(
         Constant::getNullValue(i32_ty), false, i16_ty, false);
+
+      Value* grid_dim = configure_call->getArgOperand(0);   // <32-bit: y> <32-bit: x>
+      Value* grid_dim_z = configure_call->getArgOperand(1); // <32-bit: z>
+      grid_dim_z = irb.CreateShl(
+        irb.CreateCast(castop_i32_i64, grid_dim_z, i64_ty),
+        48
+        ); // z: shift 48 left
+      grid_dim = irb.CreateOr(
+        irb.CreateAnd(grid_dim, 0xFFFFFFFFFFFF),
+        grid_dim_z
+        ); // <16-bit: z> <16-bit: y> <32-bit: x>
+
       
-      Value* blockSize = configure_call->getArgOperand(2);   // <32-bit: y> <32-bit: x>
-      Value* blockSize_z = configure_call->getArgOperand(3); // <32-bit: z>
-      blockSize = irb.CreateMul(
-        irb.CreateAnd(blockSize, 0xFFFFFFFF),
-        irb.CreateLShr(blockSize, 32)
+      Value* cta_size = configure_call->getArgOperand(2);   // <32-bit: y> <32-bit: x>
+      Value* cta_size_z = configure_call->getArgOperand(3); // <32-bit: z>
+      cta_size = irb.CreateMul(
+        irb.CreateAnd(cta_size, 0xFFFFFFFF),
+        irb.CreateLShr(cta_size, 32)
         ); // x * y
-      blockSize = irb.CreateMul(
-        irb.CreateCast(castop_i64_i16, blockSize, i16_ty),
-        irb.CreateCast(castop_i32_i16, blockSize_z, i16_ty)
+      cta_size = irb.CreateMul(
+        irb.CreateCast(castop_i64_i16, cta_size, i16_ty),
+        irb.CreateCast(castop_i32_i16, cta_size_z, i16_ty)
         ); // <uint16_t>(x*y) * <uint16_t>z
 
     
 
       Value* trace_touch_args[] = {stream_ptr};
-      Value* trace_start_args[] = {stream_ptr, kernel_name_val, blockSize};
+      Value* trace_start_args[] = {stream_ptr, kernel_name_val, grid_dim, cta_size};
       irb.CreateCall(trc_touch, trace_touch_args);
       irb.CreateCall(trc_start, trace_start_args);
 

@@ -82,7 +82,8 @@ int main(int argc, char** argv) {
     die("%s", trace_last_error);
   }
 
-  uint64_t cta_size = 0;
+  uint16_t cta_size = 0;
+  cta_t grid_dim = {0};
 
   trace_header_kernel_t* kernel_info;  
   while (trace_next(trace) == 0) {
@@ -90,6 +91,7 @@ int main(int argc, char** argv) {
     if (trace->new_kernel) {
       kernel_info = trace->kernel_accdat[trace->kernel_i];
       printf("K %s\n", kernel_info->kernel_name);
+      grid_dim = trace->grid_dim;
       cta_size = trace->cta_size;
     } else {
       trace_record_t* r = &trace->record;
@@ -118,12 +120,20 @@ int main(int argc, char** argv) {
         
       
       printf("%c %s"
-             " %" PRIu64 " %" PRIu32 " %" PRIu16 " %" PRIu16 " %" PRIu32
              " %" PRIu64
+             " %" PRIu32 "/%" PRIu32
+             " %" PRIu16 "/%" PRIu16
+             " %" PRIu16 "/%" PRIu16
+             " %" PRIu32
+             " %" PRIu16
              " %" PRIu32 " %" PRIu32
              " %015" PRIu64,
              trace_type, OP_TYPE_NAMES[r->type],
-             r->grid, r->ctaid.x, r->ctaid.y, r->ctaid.z, r->warpv,
+             r->grid,
+             r->ctaid.x, grid_dim.x,
+             r->ctaid.y, grid_dim.y,
+             r->ctaid.z, grid_dim.z,
+             r->warpv,
              cta_size,
              r->sm, r->warpp,
              r->clock);
@@ -136,21 +146,19 @@ int main(int argc, char** argv) {
         // size
         printf(" %" PRIu32, r->req_size);
 
-        int8_t count_total = 0;
         for (int32_t addr_i = 0; addr_i < r->addr_len; addr_i++) {
           trace_record_addr_t* acc_addr = &r->addr_unit[addr_i];
           
           for (int32_t acc_i = 0; acc_i < acc_addr->count; acc_i++) {
-            printf(" %" PRIx64, acc_addr->addr + (acc_addr->offset)*acc_i);
-          }
+            uint64_t addr_cur = acc_addr->addr + (acc_addr->offset)*acc_i; // base + offset
 
-          count_total += acc_addr->count;
-        }
-        
-        // if less then WARP_SIZE access, fill with blank
-        for (uint32_t count_remain = count_total;
-             count_remain < WARP_SIZE; count_remain++) {
-          printf(" #");
+            if (addr_cur != 0) {
+              printf(" %" PRIx64, addr_cur);
+            }
+            else {
+              printf(" (inactive)");
+            }
+          }
         }
 
         // inst id

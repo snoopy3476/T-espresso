@@ -28,9 +28,9 @@ extern "C" {
     uint64_t grid;
     asm volatile ("mov.u64 %0, %%gridid;" : "=l"(grid));
     uint32_t active = __ballot_sync(FULL_MASK, 1);
-    uint32_t rlaneid = __popc(active << (32 - laneid));
-    uint32_t n_active = __popc(active);
     uint32_t lowest   = __ffs(active)-1;
+    //uint32_t rlaneid = __popc(active << (32 - laneid));
+    //uint32_t n_active = __popc(active);
 
     volatile uint32_t* valloc = (uint32_t*) allocs;
     volatile uint32_t* vcommit = (uint32_t*) commits;

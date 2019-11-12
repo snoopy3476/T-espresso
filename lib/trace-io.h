@@ -31,8 +31,13 @@ extern "C" {
 
 
   
+  typedef struct {
+    uint32_t x;
+    uint16_t y;
+    uint16_t z;
+  } cta_t;
   
-  typedef struct trace_header_inst_t {
+  typedef struct {
     uint32_t instid;
     uint32_t row;
     uint32_t col;
@@ -40,7 +45,7 @@ extern "C" {
     char inst_filename[256];
   } trace_header_inst_t;
 
-  typedef struct trace_header_kernel_t {
+  typedef struct {
     uint8_t kernel_name_len;
     char kernel_name[256];
     uint32_t insts_count;
@@ -50,19 +55,15 @@ extern "C" {
 
   
 
-  typedef struct trace_record_addr_t {
+  typedef struct {
     uint64_t addr;
     int32_t offset;
     int8_t count;
   } trace_record_addr_t;
     
-  typedef struct trace_record_t {
+  typedef struct {
     
-    struct {
-      uint32_t x;
-      uint16_t y;
-      uint16_t z;
-    } ctaid;
+    cta_t ctaid;
     uint64_t clock;
     uint64_t grid;
   
@@ -78,12 +79,14 @@ extern "C" {
     trace_record_addr_t addr_unit[1]; // managed as flexible length member
   } trace_record_t;
 
-  typedef struct trace_t {
+  typedef struct {
     FILE* file;
     uint64_t kernel_count;
     uint64_t kernel_i;
     trace_header_kernel_t** kernel_accdat;
-    uint32_t cta_size;
+
+    cta_t grid_dim;
+    uint16_t cta_size;
     char new_kernel;
     trace_record_t record;
   } trace_t;
@@ -379,7 +382,7 @@ extern "C" {
   static int trace_next(trace_t* t) {
     uint64_t buf[TRACE_RECORD_SIZE(32)/8+1]; // mem space for addr_len == threads per warp
     // end of file, this is not an error
-    if (fread(buf, 8 * sizeof(char), 1, t->file) != 1) {
+    if (fread(buf, 8, 1, t->file) != 1) {
       trace_last_error = NULL;
       return 1;
     }
@@ -387,9 +390,24 @@ extern "C" {
 
     // Entry is a kernel
     if (ch == 0x00) {
+
+      // read header
       uint8_t name_len = (buf[0] >> 48) & 0xFF;
       uint16_t cta_size = (buf[0] >> 32) & 0xFFFF;
 
+      // read grid dim
+      uint64_t grid_dim_raw;
+      if (fread(&grid_dim_raw, 8, 1, t->file) != 1) {
+        trace_last_error = NULL;
+        return 1;
+      }
+      cta_t grid_dim = {
+        (uint32_t) (grid_dim_raw & 0xFFFFFFFF),
+        (uint16_t) ((grid_dim_raw >> 32) & 0xFFFF),
+        (uint16_t) ((grid_dim_raw >> 48) & 0xFFFF)
+      };
+
+      // read kernel name
       char kernel_name[256];
     
       if (fread(kernel_name, name_len, 1, t->file) != 1) {
@@ -397,6 +415,7 @@ extern "C" {
         return 1;
       }
 
+      // find kernel index for the kernel name
       t->kernel_i = 0; // set as unknown first
       for (uint64_t i = 1; i <= t->kernel_count; i++) {
         if (t->kernel_accdat[i]->kernel_name_len == name_len &&
@@ -407,6 +426,7 @@ extern "C" {
       }
       
       t->new_kernel = 1;
+      t->grid_dim = grid_dim;
       t->cta_size = cta_size;
       trace_last_error = NULL;
       return 0;
@@ -482,11 +502,17 @@ extern "C" {
     return 0;
   }
 
-  static int trace_write_kernel(FILE* f, const char* name, uint16_t cta_size) {
+  static int trace_write_kernel(FILE* f, const char* name,
+                                uint64_t grid_dim, uint16_t cta_size) {
     uint8_t name_len = strlen(name) & 0xFF;
     uint64_t header = ((uint64_t)name_len << 48) | ((uint64_t)cta_size << 32);
   
     if (fwrite(&header, 8, 1, f) < 1) {
+      trace_last_error = "write error";
+      return 1;
+    }
+    
+    if (fwrite(&grid_dim, 8, 1, f) < 1) {
       trace_last_error = "write error";
       return 1;
     }

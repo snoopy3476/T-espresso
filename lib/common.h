@@ -141,11 +141,11 @@ extern "C" {
                       req_size, clock)
 
 
-  typedef struct record_header_t {
+  typedef struct {
     uint64_t data[5];
   } record_header_t;
   
-  typedef struct record_t {
+  typedef struct {
     uint64_t data[DIV_ROUND_UP(RECORD_SIZE, 8)];
   } record_t;
 

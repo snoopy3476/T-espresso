@@ -112,7 +112,8 @@ static std::string traceName(std::string id) {
 
 typedef struct kernel_trace_arg_t {
   const char* kernel_name;
-  uint16_t kernel_block_size;
+  uint64_t kernel_grid_dim;
+  uint16_t kernel_cta_size;
 } kernel_trace_arg_t;
 
 
@@ -163,7 +164,7 @@ public:
     cudaFreeHost(commits_host);
   }
 
-  void start(const char* name, uint16_t block_size) {
+  void start(const char* name, uint64_t grid_dim, uint16_t cta_size) {
     always_assert(!should_run);
     should_run = true;
 
@@ -173,7 +174,7 @@ public:
     // just for testing purposes
     memset(records_host, 0, SLOTS_NUM * SLOTS_SIZE * RECORD_SIZE);
 
-    trace_write_kernel(output, name, block_size);
+    trace_write_kernel(output, name, grid_dim, cta_size);
 
     worker_thread = std::thread(consume, this);
 
@@ -430,7 +431,8 @@ extern "C" {
   static void __trace_start_callback(cudaStream_t stream, cudaError_t status, void* vargs) {
     auto* consumer = __trace_manager.getConsumer(stream);
     kernel_trace_arg_t* vargs_cast = (kernel_trace_arg_t*)vargs;
-    consumer->start(vargs_cast->kernel_name, vargs_cast->kernel_block_size);
+    consumer->start(vargs_cast->kernel_name, vargs_cast->kernel_grid_dim,
+                    vargs_cast->kernel_cta_size);
     free(vargs_cast);
   }
 
@@ -454,14 +456,15 @@ extern "C" {
     __trace_manager.touchConsumer(stream);
   }
 
-  void __trace_start(cudaStream_t stream, const char* kernel_name, uint16_t block_size) {
+  void __trace_start(cudaStream_t stream, const char* kernel_name,
+                     uint64_t grid_dim, uint16_t cta_size) {
     kernel_trace_arg_t* arg = (kernel_trace_arg_t*) malloc(sizeof(kernel_trace_arg_t));
     if (arg == nullptr) {
       printf("unable to allocate memory\n");
       abort();
     }
     
-    *arg = (kernel_trace_arg_t){kernel_name, block_size};
+    *arg = (kernel_trace_arg_t){kernel_name, grid_dim, cta_size};
     cudaChecked(cudaStreamAddCallback(stream,
                                       __trace_start_callback, (void*)arg, 0));
   }
