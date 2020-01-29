@@ -179,7 +179,7 @@ namespace cuprof {
 
   
 
-  // register passes to be executed automatically
+  // Register passes to be executed automatically
 
   static void registerStandardPasses(const PassManagerBuilder&,
                                      legacy::PassManagerBase& pm) {
@@ -187,17 +187,34 @@ namespace cuprof {
     pm.add(createMarkAllDeviceForInlinePass());
     pm.add(createAlwaysInlinerLegacyPass());
     pm.add(createLinkDeviceSupportPass());
-    pm.add(createInstrumentDevicePass(pass_args));
 
     pm.add(createInstrumentHostPass(pass_args));
   }
 
-  static RegisterStandardPasses RegisterTracePass(
+  static RegisterStandardPasses pass_std_reg(
     PassManagerBuilder::EP_ModuleOptimizerEarly,
     registerStandardPasses);
-  static RegisterStandardPasses RegisterTracePass0(
+  static RegisterStandardPasses pass_std_opt0(
     PassManagerBuilder::EP_EnabledOnOptLevel0,
     registerStandardPasses);
+  
+
+  // Register device pass to the optimizer last
+  // to prevent hidering optimization
+  static void registerDevicePass(const PassManagerBuilder&,
+                                 legacy::PassManagerBase& pm) {
+    
+    pm.add(createInstrumentDevicePass(pass_args));
+  }
+
+  static RegisterStandardPasses pass_dev_reg(
+    PassManagerBuilder::EP_OptimizerLast,
+    registerDevicePass);
+  static RegisterStandardPasses pass_dev_opt0(
+    PassManagerBuilder::EP_EnabledOnOptLevel0,
+    registerDevicePass);
+  
+
   
 }
   

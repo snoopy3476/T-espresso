@@ -11,7 +11,7 @@ extern "C" {
  *  Write trace data and associated info
  *  to the externally allocated areas.
  */
-  __device__ void ___cuprof_trace(uint8_t* records, uint8_t* allocs, uint8_t* commits,
+  __device__ __noinline__ void ___cuprof_trace(uint8_t* records, uint8_t* allocs, uint8_t* commits,
                                   uint8_t to_be_traced,
                                   uint64_t addr, uint64_t ctaid_serial,
                                   uint32_t instid, uint32_t warpv,
