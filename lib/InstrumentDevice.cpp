@@ -671,7 +671,7 @@ namespace cuprof {
 
       for (Instruction* inst : memacc_insts) {
         Value* ptr_operand = nullptr;
-        irb.SetInsertPoint(inst);
+        irb.SetInsertPoint(inst->getNextNode()); // insert after the access
 
 
         // get type & addr
