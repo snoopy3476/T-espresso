@@ -27,10 +27,8 @@ extern "C" {
     asm volatile ("mov.u32 %0, %%laneid;" : "=r"(laneid));
     uint64_t grid;
     asm volatile ("mov.u64 %0, %%gridid;" : "=l"(grid));
-    uint32_t active = __ballot_sync(FULL_MASK, 1);
+    uint32_t active = __activemask();
     uint32_t lowest   = __ffs(active)-1;
-    //uint32_t rlaneid = __popc(active << (32 - laneid));
-    //uint32_t n_active = __popc(active);
 
     volatile uint32_t* valloc = (uint32_t*) allocs;
     volatile uint32_t* vcommit = (uint32_t*) commits;
@@ -65,7 +63,7 @@ extern "C" {
 
 
     // write requested addr for each lane
-    rec_offset = __shfl_sync(FULL_MASK, rec_offset, lowest);
+    rec_offset = __shfl_sync(active, rec_offset, lowest);
     uint64_t* rec_addr = (uint64_t*) &(records[(rec_offset) * RECORD_SIZE +
                                                WARP_RECORD_RAW_SIZE(laneid)]);
     *rec_addr = addr;
