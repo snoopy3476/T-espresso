@@ -7,6 +7,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stddef.h>
+#include <unistd.h>
+#include <fcntl.h>
 #include "common.h"
 
 
@@ -25,11 +27,29 @@
 extern "C" {
 #endif
 
+
+#define NAME_UNKNOWN "(unknown)"
   
   static const char TRACE_HEADER_PREFIX[] = "__CUPROF_TRACE__";
   static const char TRACE_HEADER_POSTFIX[] = "\0\0\0\0";
+  static const char* trace_last_error = NULL;
 
+  
+/****************
+ * Trace Struct *
+ ****************/
+  
+#define TRACEFILE_BUF_SIZE (RECORD_SIZE * RECORDS_PER_SLOT * sizeof(byte) * 4)
+  
+  typedef struct {
+    int file;
+    uint64_t buf_commits;
+    unsigned char* buf;
+  } tracefile_base_t;
 
+  typedef tracefile_base_t* tracefile_t;
+
+  
   
   typedef struct {
     uint32_t x;
@@ -53,6 +73,9 @@ extern "C" {
     trace_header_inst_t insts[1]; // managed as flexible length member
   } trace_header_kernel_t;
 
+  static trace_header_kernel_t empty_kernel = {
+    sizeof(NAME_UNKNOWN)+1, NAME_UNKNOWN, 0, {{0}}
+  };
   
 
   typedef struct {
@@ -80,7 +103,7 @@ extern "C" {
   } trace_record_t;
 
   typedef struct {
-    FILE* file;
+    tracefile_t tracefile;
     uint64_t kernel_count;
     uint64_t kernel_i;
     trace_header_kernel_t** kernel_accdat;
@@ -92,47 +115,128 @@ extern "C" {
   } trace_t;
 
   
-
-#define NAME_UNKNOWN "(unknown)"
-  static trace_header_kernel_t empty_kernel = {
-    sizeof(NAME_UNKNOWN)+1, NAME_UNKNOWN, 0, {{0}}
-  };
-  
-  static const char* trace_last_error = NULL;
-
-
-  
-/**********
- * reader *
- **********/
-  
 #define TRACE_RECORD_SIZE(addr_len)                                     \
   (sizeof(trace_record_t) + sizeof(trace_record_addr_t) * (addr_len - 1))
 #define CONST_MAX(x, y) ((x) > (y) ? (x) : (y))
 
+  
+
+/******************
+ * Trace File I/O *
+ ******************/
+  
+  typedef enum {TRACEFILE_READ, TRACEFILE_WRITE} tracefile_mode_t;
+  
+  static inline tracefile_t tracefile_open(const char* filename, tracefile_mode_t mode) {
+    tracefile_t return_val = (tracefile_t) malloc(sizeof(tracefile_base_t));
+    if (return_val == NULL)
+      return NULL;
+
+
+    
+    if (filename == NULL) {
+      return_val->file = STDIN_FILENO;
+    }
+    else {
+      return_val->file = open(filename,
+                              (mode == TRACEFILE_WRITE)
+                              ? (O_WRONLY | O_CREAT | O_APPEND | O_TRUNC)
+                              : (O_RDONLY),
+                              S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+    }
+    if (return_val->file == -1) {
+      free(return_val);
+      return NULL;
+    }
+
+    
+
+    return_val->buf_commits = 0;
+    if (mode == TRACEFILE_WRITE) {
+      return_val->buf = (byte*) malloc(TRACEFILE_BUF_SIZE);
+      if (return_val->buf == NULL) {
+        close(return_val->file);
+        free(return_val);
+        return NULL;
+      }
+    }
+
+    return return_val;
+  }
+  
+  static inline int tracefile_close(tracefile_t tracefile) {
+
+    if (tracefile == NULL)
+      return 0;
+
+
+    // if unwritten data remains in the buffer, flush to file
+    if (tracefile->buf_commits > 0) {
+      write(tracefile->file,
+            tracefile->buf,
+            tracefile->buf_commits);
+    }
+
+    int close_result = close(tracefile->file);
+    if (close_result == -1)
+      return 0;
+
+    if (tracefile->buf != NULL) {
+      free(tracefile->buf);
+    }
+
+    free(tracefile);
+
+    return 1;
+  }
+
+  static inline int tracefile_read(tracefile_t tracefile,
+                                   void* dest, size_t size) {
+    return (read(tracefile->file, dest, size) == (ssize_t) size);
+  }
+  
+  static inline int tracefile_write(tracefile_t tracefile,
+                                    const void* src, size_t size) {
+    int return_val = 1;
+    
+    // if overflow is expected after write, then flush to file first
+    if (tracefile->buf_commits + size >= TRACEFILE_BUF_SIZE) {
+      return_val = (write(tracefile->file,
+                          tracefile->buf,
+                          tracefile->buf_commits)
+                    == (ssize_t)tracefile->buf_commits);
+      tracefile->buf_commits = 0;
+    }
+
+    // copy to tracefile buffer
+    memcpy(tracefile->buf + tracefile->buf_commits, src, size);
+    tracefile->buf_commits += size;
+    return return_val;
+  }
+
 
 /**********
  * reader *
  **********/
 
-  static size_t int_serialize(char* buf, size_t byte, uint32_t input) {
+  static size_t int_serialize(byte* buf, size_t size_byte, uint32_t input) {
     
-    for (size_t i = 0; i < byte; i++) {
+    for (size_t i = 0; i < size_byte; i++) {
       buf[i] = (uint8_t) (input >> (i * 8)) & 0xFF;
     }
     
-    return byte;
+    return size_byte;
   }
   
-  static size_t int_deserialize(uint32_t* output, size_t byte, char* buf) {
+  static size_t int_deserialize(uint32_t* output, size_t size_byte, byte* buf) {
     
     uint32_t value = 0;
-    for (size_t i = 0; i < byte; i++) {
+    for (size_t i = 0; i < size_byte; i++) {
       value += ((uint32_t)buf[i] & 0xFF) << (i * 8);
     }
     *output = value;
     
-    return byte;
+    return size_byte;
   }
   
 
@@ -141,12 +245,11 @@ extern "C" {
   }
 
   
-  static size_t header_serialize(char* buf, trace_header_kernel_t* kernel_header) {
+  static size_t header_serialize(byte* buf, trace_header_kernel_t* kernel_header) {
 
     // build header byte data
     if (!buf || !kernel_header) {
-      fprintf(stderr, "cuprof: Failed to serialize kernel header!\n");
-      abort();
+      return 0;
     }
     
     size_t offset = 0;
@@ -182,17 +285,16 @@ extern "C" {
   }
 
 
-  static size_t get_kernel_header_bytes_after_deserialize(char* buf) {
+  static size_t get_kernel_header_bytes_after_deserialize(byte* buf) {
     uint32_t count;
     int_deserialize(&count, 4, buf + 5); // inst count
     return sizeof(trace_header_kernel_t) + (sizeof(trace_header_inst_t) * (count));
   }
 
-  static size_t header_deserialize(trace_header_kernel_t* kernel_header, char* serial_data) {
+  static size_t header_deserialize(trace_header_kernel_t* kernel_header, byte* serial_data) {
     
     if (!kernel_header || !serial_data) {
-      fprintf(stderr, "cuprof: Failed to deserialize kernel header!\n");
-      abort();
+      return 0;
     }
 
 
@@ -234,8 +336,8 @@ extern "C" {
       offset += inst_header->inst_filename_len;
 
       if (i != inst_header->instid) {
-        fprintf(stderr, "cuprof: Failed to deserialize kernel header!\n");
-        abort();
+        trace_last_error = "failed to deserialize kernel header";
+        return 0;
       }
     }
 
@@ -248,14 +350,16 @@ extern "C" {
 
   static void trace_serialize(trace_record_t* record, record_t* buf) {
     
-    record_t data = RECORD_SET_INIT(
-      record->addr_len, record->type,
-      record->instid, record->warpv,
-      record->ctaid.x, record->ctaid.y, record->ctaid.z,
-      record->grid,
-      record->warpp, record->sm,
-      record->req_size, record->clock
-      );
+    record_t data = {
+      RECORD_SET_INIT(
+        record->addr_len, record->type,
+        record->instid, record->warpv,
+        record->ctaid.x, record->ctaid.y, record->ctaid.z,
+        record->grid,
+        record->warpp, record->sm,
+        record->req_size, record->clock
+        )
+    };
     *buf = data;
 
     for (uint8_t i = 0; i < record->addr_len; i++) {
@@ -304,20 +408,26 @@ extern "C" {
 
 
   
-  static trace_t* trace_open(FILE* f) {
-    char delim_buf[CONST_MAX(sizeof(TRACE_HEADER_PREFIX),
+  static trace_t* trace_open(const char* filename) {
+
+    tracefile_t input_file;
+    input_file = tracefile_open(filename, TRACEFILE_READ);
+    
+    
+    byte delim_buf[CONST_MAX(sizeof(TRACE_HEADER_PREFIX),
                              sizeof(TRACE_HEADER_POSTFIX) + 5)];
 
     // check trace header prefix    
-    if (fread(delim_buf, sizeof(TRACE_HEADER_PREFIX), 1, f) < 1 &&
-        memcmp(delim_buf, TRACE_HEADER_PREFIX, sizeof(TRACE_HEADER_PREFIX)) != 0) {
+    if (! tracefile_read(input_file, delim_buf, sizeof(TRACE_HEADER_PREFIX)) ||
+        memcmp(delim_buf, TRACE_HEADER_PREFIX, sizeof(TRACE_HEADER_PREFIX))
+        != 0) {
       trace_last_error = "failed to read trace header";
       return NULL;
     }
 
     // get trace header length
     uint32_t accdat_len;
-    if (fread(delim_buf, sizeof(uint32_t), 1, f) < 1) {
+    if (! tracefile_read(input_file, delim_buf, sizeof(uint32_t))) {
       trace_last_error = "failed to read trace header length";
       return NULL;
     }
@@ -326,13 +436,13 @@ extern "C" {
 
     
     // read access data part from header
-    char* accdat = (char*) malloc(sizeof(char) * accdat_len);
+    byte* accdat = (byte*) malloc(accdat_len);
     if (!accdat) {
       trace_last_error = "failed to allocate memory";
       return NULL;
     }
 
-    if (fread(accdat, sizeof(char), accdat_len, f) < accdat_len) {
+    if (! tracefile_read(input_file, accdat, accdat_len)) {
       trace_last_error = "failed to read trace header";
       return NULL;
     }
@@ -355,20 +465,27 @@ extern "C" {
       }
       
       res->kernel_accdat[kernel_count+1] = kernel_cur;
-      offset += header_deserialize(kernel_cur, accdat + offset);
+
+      size_t kernel_data_size = header_deserialize(kernel_cur, accdat + offset);
+      if (kernel_data_size == 0) {
+        trace_last_error = "failed to deserialize kernel header";
+        return NULL;
+      }
+      offset += kernel_data_size;
     }
 
 
     
     // check trace header postfix
-    if (fread(delim_buf, sizeof(TRACE_HEADER_POSTFIX), 1, f) < 1 &&
-        memcmp(delim_buf, TRACE_HEADER_POSTFIX, sizeof(TRACE_HEADER_POSTFIX)) != 0) {
+    if (! tracefile_read(input_file, delim_buf, sizeof(TRACE_HEADER_POSTFIX)) ||
+        memcmp(delim_buf, TRACE_HEADER_POSTFIX, sizeof(TRACE_HEADER_POSTFIX))
+        != 0) {
       trace_last_error = "failed to read trace header";
       return NULL;
     }
 
 
-    res->file = f;
+    res->tracefile = input_file;
     res->kernel_count = kernel_count;
     res->kernel_i = (uint64_t)-1;
     res->new_kernel = 0;
@@ -382,7 +499,7 @@ extern "C" {
   static int trace_next(trace_t* t) {
     uint64_t buf[TRACE_RECORD_SIZE(32)/8+1]; // mem space for addr_len == threads per warp
     // end of file, this is not an error
-    if (fread(buf, 8, 1, t->file) != 1) {
+    if (! tracefile_read(t->tracefile, buf, 8)) {
       trace_last_error = NULL;
       return 1;
     }
@@ -394,10 +511,10 @@ extern "C" {
       // read header
       uint8_t name_len = (buf[0] >> 48) & 0xFF;
       uint16_t cta_size = (buf[0] >> 32) & 0xFFFF;
-
+      
       // read grid dim
       uint64_t grid_dim_raw;
-      if (fread(&grid_dim_raw, 8, 1, t->file) != 1) {
+      if (! tracefile_read(t->tracefile, &grid_dim_raw, 8)) {
         trace_last_error = NULL;
         return 1;
       }
@@ -408,9 +525,9 @@ extern "C" {
       };
 
       // read kernel name
-      char kernel_name[256];
+      byte kernel_name[256];
     
-      if (fread(kernel_name, name_len, 1, t->file) != 1) {
+      if (! tracefile_read(t->tracefile, kernel_name, name_len)) {
         trace_last_error = "unable to read kernel name length";
         return 1;
       }
@@ -435,7 +552,7 @@ extern "C" {
     // Entry is a record
     else {
       t->new_kernel = 0;
-      if (fread(buf+1, RECORD_RAW_SIZE(ch) - 8, 1, t->file) != 1) {
+      if (! tracefile_read(t->tracefile, buf+1, RECORD_RAW_SIZE(ch) - 8)) {
         trace_last_error = "unable to read record";
         return 1;
       }
@@ -451,18 +568,16 @@ extern "C" {
     }
   }
 
-  static int trace_eof(trace_t* t) {
-    return feof(t->file);
-  }
-
   static void trace_close(trace_t* t) {
 
     for (uint64_t i = 1; i <= t->kernel_count; i++) {
       free(t->kernel_accdat[i]);
     }
     free(t->kernel_accdat);
+
+    if (t->tracefile->file != STDIN_FILENO)
+      tracefile_close(t->tracefile);
     
-    fclose(t->file);
     free(t);
   }
 
@@ -474,26 +589,37 @@ extern "C" {
  * writer *
  **********/
 
-  static int trace_write_header(FILE* f, const char* accdat, uint64_t accdat_len) {
+  static tracefile_t trace_write_open(const char* filename) {
+    
+    tracefile_t tracefile = tracefile_open(filename, TRACEFILE_WRITE);
+    
+    if (tracefile == NULL) {
+      trace_last_error = "file create error";
+    }
+
+    return tracefile;
+  }
   
-    if (fwrite(TRACE_HEADER_PREFIX, sizeof(TRACE_HEADER_PREFIX), 1, f) < 1) {
+  static int trace_write_header(tracefile_t tracefile, const void* accdat, uint64_t accdat_len) {
+  
+    if (! tracefile_write(tracefile, TRACE_HEADER_PREFIX, sizeof(TRACE_HEADER_PREFIX))) {
       trace_last_error = "header prefix write error";
       return 1;
     }
 
-    char accdat_len_serialized[4] = {0};
+    byte accdat_len_serialized[4] = {0};
     int_serialize(accdat_len_serialized, 4, accdat_len);
-    if (fwrite(accdat_len_serialized, sizeof(uint32_t), 1, f) < 1) {
+    if (! tracefile_write(tracefile, accdat_len_serialized, sizeof(uint32_t))) {
       trace_last_error = "header length write error";
       return 1;
     }
 
-    if (fwrite(accdat, sizeof(char), accdat_len, f) < accdat_len) {
+    if (! tracefile_write(tracefile, accdat, accdat_len)) {
       trace_last_error = "header accdat write error";
       return 1;
     }
 
-    if (fwrite(TRACE_HEADER_POSTFIX, sizeof(TRACE_HEADER_POSTFIX), 1, f) < 1) {
+    if (! tracefile_write(tracefile, TRACE_HEADER_POSTFIX, sizeof(TRACE_HEADER_POSTFIX))) {
       trace_last_error = "header postfix write error";
       return 1;
     }
@@ -502,34 +628,37 @@ extern "C" {
     return 0;
   }
 
-  static int trace_write_kernel(FILE* f, const char* name,
+  static int trace_write_kernel(tracefile_t tracefile, const char* name,
                                 uint64_t grid_dim, uint16_t cta_size) {
+    
     uint8_t name_len = strlen(name) & 0xFF;
     uint64_t header = ((uint64_t)name_len << 48) | ((uint64_t)cta_size << 32);
-  
-    if (fwrite(&header, 8, 1, f) < 1) {
+
+    uint8_t write_size = sizeof(header) + sizeof(grid_dim) + name_len;
+    uint8_t* write_buf = (uint8_t*) malloc(write_size);
+    uint8_t* buf_ptr = write_buf;
+    memcpy(buf_ptr, &header, sizeof(header));
+    buf_ptr += sizeof(header);
+    memcpy(buf_ptr, &grid_dim, sizeof(grid_dim));
+    buf_ptr += sizeof(grid_dim);
+    memcpy(buf_ptr, name, name_len);
+
+    if (! tracefile_write(tracefile, write_buf, write_size)) {
       trace_last_error = "write error";
       return 1;
     }
     
-    if (fwrite(&grid_dim, 8, 1, f) < 1) {
-      trace_last_error = "write error";
-      return 1;
-    }
-  
-    if (fwrite(name, name_len, 1, f) < 1) {
-      trace_last_error = "write error";
-      return 1;
-    }
+    free(write_buf);
     trace_last_error = NULL;
+
     return 0;
   }
 
-  static int trace_write_record(FILE* f, trace_record_t* record) {
+  static int trace_write_record(tracefile_t tracefile, trace_record_t* record) {
   
-    char buf[TRACE_RECORD_SIZE(32)]; // mem space for addr_len == threads per warp
+    byte buf[TRACE_RECORD_SIZE(32)]; // mem space for addr_len == threads per warp
     trace_serialize(record, (record_t*)buf);
-    if (fwrite(buf, RECORD_RAW_SIZE(record->addr_len), 1, f) < 1) {
+    if (! tracefile_write(tracefile, buf, RECORD_RAW_SIZE(record->addr_len))) {
       trace_last_error = "write error";
       return 1;
     }
@@ -537,6 +666,10 @@ extern "C" {
     return 0;
   }
 
+  
+  static int trace_write_close(tracefile_t tracefile) {
+    return tracefile_close(tracefile);
+  }
 
 
   

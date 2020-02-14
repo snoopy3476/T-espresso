@@ -29,7 +29,7 @@
 #include <stdlib.h>
 
 #define die(...) do {                           \
-    printf(__VA_ARGS__);                        \
+    fprintf(stderr, __VA_ARGS__);                \
     exit(1);                                    \
   } while(0)
 
@@ -47,25 +47,21 @@ const char* OP_TYPE_NAMES[] = {
 };
 
 void usage(const char* program_name) {
-  printf("Usage: %s [trace_file]\n", program_name);
-  printf("\n");
-  printf("If a file is provided, reads a binary memory trace from it and\n");
-  printf("dumps it to stdout. If no file is provided, uses stdin.\n");
+  fprintf(stderr, "Usage: %s [trace_file]\n", program_name);
+  fprintf(stderr, "\n");
+  fprintf(stderr, "If a file is provided, reads a binary memory trace from it and\n");
+  fprintf(stderr, "dumps it to stdout. If no file is provided, uses stdin.\n");
 }
 
 int main(int argc, char** argv) {
-  FILE* input;
+
+  char* input_filename = NULL;
 
   switch (argc) {
   case 2: {
-    input = fopen(argv[1], "r");
-    if (input == NULL) {
-      die("Unable to open file '%s', exiting\n", argv[1]);
-    }
-    break;
+    input_filename = argv[1];
   }
   case 1: {
-    input = stdin;
     break;
   }
   default:
@@ -76,7 +72,7 @@ int main(int argc, char** argv) {
   
   int quiet = (int) (getenv("QUIET") != NULL);
 
-  trace_t* trace = trace_open(input);
+  trace_t* trace = trace_open(input_filename);
 
   if (trace == NULL) {
     die("%s", trace_last_error);
@@ -178,7 +174,6 @@ int main(int argc, char** argv) {
     }
   }
   if (trace_last_error != NULL) {
-    printf("position: %zu\n", ftell(trace->file));
     die("%s\n", trace_last_error);
   }
 

@@ -1,9 +1,9 @@
 #include "../lib/common.h"
-#define FULL_MASK 0xFFFFFFFF
-#define I32_MAX 0xFFFFFFFF
-
+//#include <stdio.h>
 
 extern "C" {
+  
+  __device__ uint64_t ___cuprof_grid_allocs_count[0x10000][2]; // 0x10000 == 65536
 
 /**************************************************** 
  *  void ___cuprof_trace();
@@ -11,45 +11,76 @@ extern "C" {
  *  Write trace data and associated info
  *  to the externally allocated areas.
  */
-  __device__ __noinline__ void ___cuprof_trace(uint8_t* records, uint8_t* allocs, uint8_t* commits,
-                                  uint8_t to_be_traced,
-                                  uint64_t addr, uint64_t ctaid_serial,
-                                  uint32_t instid, uint32_t warpv,
-                                  uint32_t sm, uint32_t warpp,
-                                  uint16_t req_size, uint8_t type) {
-    uint64_t clock;
-    asm volatile ("mov.u64 %0, %%clock64;" : "=l"(clock));
+  __device__ __noinline__ void ___cuprof_trace(uint32_t* alloc, uint32_t* commit,
+                                               uint32_t* count, uint8_t* records,
+                                               uint64_t addr,
+                                               uint64_t grid, uint64_t ctaid_serial,
+                                               uint32_t warpv, uint32_t lane,
+                                               uint32_t instid,
+                                               uint32_t sm, uint32_t warpp,
+                                               uint16_t req_size,
+                                               uint8_t type, uint8_t to_be_traced) {
     
     if (!to_be_traced)
       return;
 
-    uint32_t laneid;
-    asm volatile ("mov.u32 %0, %%laneid;" : "=r"(laneid));
-    uint64_t grid;
-    asm volatile ("mov.u64 %0, %%gridid;" : "=l"(grid));
-    uint32_t active = __activemask();
-    uint32_t lowest   = __ffs(active)-1;
+    uint64_t clock;
+    asm volatile ("mov.u64 %0, %%clock64;" : "=l"(clock));
+    uint32_t active;
+    asm volatile ("activemask.b32 %0;" : "=r"(active));
+    uint32_t lowest = __ffs(active)-1;
 
-    volatile uint32_t* valloc = (uint32_t*) allocs;
-    volatile uint32_t* vcommit = (uint32_t*) commits;
-    uint32_t rec_offset = I32_MAX;
+    volatile uint32_t* valloc = alloc;
+    volatile uint32_t* vcommit = commit;
+    volatile uint32_t* vcount = count;
+    
+    uint32_t rec_offset = UINT32_MAX;
     
     
     // allocate space in slot
-    if (laneid == lowest) {
+    if (lane == lowest) {
+      
+      // try to allocate until available
 
-      // try to allocate until valid
-      while(*valloc >= SLOTS_SIZE ||
-            (rec_offset = atomicInc((uint32_t*)allocs, I32_MAX)) >= SLOTS_SIZE) {
-
-        // if slot is over-allocated (not valid),
-        // cancel the allocation and wait for flush
-        if (rec_offset != I32_MAX) {
-          atomicDec((uint32_t*)allocs, I32_MAX);
-          rec_offset = I32_MAX;
+      /*
+      while (*valloc >= RECORDS_PER_SLOT ||
+             (rec_offset = atomicInc(alloc, UINT32_MAX)) >= RECORDS_PER_SLOT) {
+        if (rec_offset != UINT32_MAX) {
+          atomicDec(alloc, UINT32_MAX);
+          rec_offset = UINT32_MAX;
         }
       }
+      */
+        
+      while (true) {
 
+        // if allocation is full, then wait for flush
+        while (*valloc >= RECORDS_PER_SLOT) {
+          
+          // if flush req sent, and all flushed on host
+          if ((*valloc == RECORDS_PER_SLOT) && (*vcommit == UINT32_MAX) &&
+              (*vcount == 0)) {
+            
+            if (atomicInc(commit, UINT32_MAX) == UINT32_MAX) {
+              __threadfence(); // guarantee resetting vcommit after valloc
+              *valloc = 0;
+            }
+            else {
+              atomicDec(commit, UINT32_MAX);
+            }
+            
+          }
+        }
+
+        // if overallocated, then cancel the allocation and wait for flush
+        if ((rec_offset = atomicInc(alloc, UINT32_MAX)) >= RECORDS_PER_SLOT) {
+          atomicDec(alloc, UINT32_MAX);
+        }
+        else {
+          break;
+        }
+      }
+        
       // write header at lowest lane
       record_header_t* rec_header =
         (record_header_t*) &(records[rec_offset * RECORD_SIZE]);
@@ -65,15 +96,66 @@ extern "C" {
     // write requested addr for each lane
     rec_offset = __shfl_sync(active, rec_offset, lowest);
     uint64_t* rec_addr = (uint64_t*) &(records[(rec_offset) * RECORD_SIZE +
-                                               WARP_RECORD_RAW_SIZE(laneid)]);
+                                               WARP_RECORD_RAW_SIZE(lane)]);
     *rec_addr = addr;
+
 
     // guarantee all writes before to be written to the 'records'
     __threadfence_system();
+    /*
+    if (lane == lowest) {
+      if (atomicInc(commit, UINT32_MAX) == RECORDS_PER_SLOT - 1) {
+        *vcount = *vcommit;
+        __threadfence_system();
+        while(*vcount);
+        *vcommit = 0;
+        __threadfence();
+        *valloc = 0;
+      }
+    }
+    */
+    
+    // commit space in slot, and send full signal to the host
+    if (lane == lowest) {
+      if (atomicInc(commit, UINT32_MAX) == RECORDS_PER_SLOT - 1) {
+        *vcount = RECORDS_PER_SLOT; // request flush to host
+        //printf("DEV_vcommit: %u\n", *vcommit);
+        __threadfence_system();
+        *vcommit = UINT32_MAX; // request sent successfully
+      }
+    }
+    
+  }
 
+  
 
-    // commit space in slot
-    if (laneid == lowest) atomicInc((uint32_t*)commits, I32_MAX);
+/**************************************************** 
+ *  void ___cuprof_trace_ret();
+ *
+ *  Flush vcommit to count (host)
+ */
+  __device__ void ___cuprof_trace_ret(uint32_t* commit, uint32_t* count,
+                                      uint32_t lane) {
+    
+    uint32_t active;
+    asm volatile ("activemask.b32 %0;" : "=r"(active));
+    uint32_t lowest = __ffs(active)-1;
+
+    volatile uint32_t* vcommit = commit;
+    volatile uint32_t* vcount = count;
+
+    if (lane == lowest) {
+      __threadfence();
+      uint32_t rec_count = *vcommit;
+
+      // if request not sent at the point of return, then send request
+      if (rec_count != UINT32_MAX) {
+        atomicMax(count, rec_count);
+      }
+      // guarantee write before return
+      __threadfence_system();
+    }
+
   }
 
   

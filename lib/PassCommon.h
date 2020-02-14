@@ -18,7 +18,7 @@ static llvm::StructType* getTraceInfoType(llvm::LLVMContext &ctx) {
     Type::getInt8PtrTy(ctx),
     Type::getInt8PtrTy(ctx),
     Type::getInt8PtrTy(ctx),
-    Type::getInt32Ty(ctx),
+    Type::getInt8PtrTy(ctx)
   };
 
   return StructType::create(fields, "traceinfo_t");
@@ -27,19 +27,18 @@ static llvm::StructType* getTraceInfoType(llvm::LLVMContext &ctx) {
 
 
 enum CuprofSymbolType {
-  SYMBOL_TRACE = 0,
-  SYMBOL_DATA_VAR = 1,
-  SYMBOL_DATA_FUNC = 2,
-  SYMBOL_END = 3,
+  SYMBOL_DATA_VAR,
+  SYMBOL_DATA_FUNC,
+  SYMBOL_END,
 };
 
 
+#define CUPROF_TRACE_BASE_INFO "___cuprof_trace_base_info"
 #define CUPROF_ACCDAT_VAR "___cuprof_accdat_var"
 #define CUPROF_ACCDAT_VARLEN "___cuprof_accdat_varlen"
 #define CUPROF_ACCDAT_CTOR "___cuprof_accdat_ctor"
 #define CUPROF_ACCDAT_DTOR "___cuprof_accdat_dtor"
 const char * const SYMBOL_TYPE_STR[] = {
-  "___cuprof_traceinfo_",
   "___cuprof_accdat_var_",
   "___cuprof_accdat_func_"
 };
@@ -47,7 +46,7 @@ const char * const SYMBOL_TYPE_STR[] = {
 
 
 static std::string getSymbolNameForKernel(const llvm::Twine &kernel_name,
-                                          CuprofSymbolType type = SYMBOL_TRACE) {
+                                          CuprofSymbolType type) {
   
   if (type >= SYMBOL_END || type < (CuprofSymbolType)0)
     type = (CuprofSymbolType)0;
@@ -56,7 +55,7 @@ static std::string getSymbolNameForKernel(const llvm::Twine &kernel_name,
 }
 
 static std::string getSymbolNameForKernel(const std::string &kernel_name,
-                                          CuprofSymbolType type = SYMBOL_TRACE) {
+                                          CuprofSymbolType type) {
   return getSymbolNameForKernel(llvm::Twine(kernel_name), type);
 }
 

@@ -49,9 +49,11 @@ namespace cuprof {
     Type* cuda_err_ty = nullptr;
 
     Type* void_ty = nullptr;
+    Type* ip_ty = nullptr;
     Type* i8p_ty = nullptr;
     Type* i32p_ty = nullptr;
     Type* i64p_ty = nullptr;
+    Type* i_ty = nullptr;
     Type* i8_ty = nullptr;
     Type* i16_ty = nullptr;
     Type* i32_ty = nullptr;
@@ -60,11 +62,9 @@ namespace cuprof {
     FunctionCallee accdat_ctor = nullptr;
     FunctionCallee accdat_dtor = nullptr;
     FunctionCallee accdat_append = nullptr;
-    FunctionCallee trc_fill_info = nullptr;
-    FunctionCallee trc_copy_to_symbol = nullptr;
-    FunctionCallee trc_touch = nullptr;
     FunctionCallee trc_start = nullptr;
     FunctionCallee trc_stop = nullptr;
+    FunctionCallee cuda_get_device = nullptr;
     FunctionCallee cuda_memcpy_from_symbol = nullptr;
     FunctionCallee cuda_get_symbol_size = nullptr;
 
@@ -85,9 +85,11 @@ namespace cuprof {
       cuda_err_ty = Type::getIntNTy(ctx, sizeof(cudaError_t) * 8);
 
       void_ty = Type::getVoidTy(ctx);
+      ip_ty = Type::getIntNPtrTy(ctx, sizeof(int) * 8);
       i8p_ty = Type::getInt8PtrTy(ctx);
       i32p_ty = Type::getInt32PtrTy(ctx);
       i64p_ty = Type::getInt64PtrTy(ctx);
+      i_ty = Type::getIntNTy(ctx, sizeof(int) * 8);
       i8_ty = Type::getInt8Ty(ctx);
       i16_ty = Type::getInt16Ty(ctx);
       i32_ty = Type::getInt32Ty(ctx);
@@ -104,18 +106,13 @@ namespace cuprof {
       accdat_append = module.getOrInsertFunction("___cuprof_accdat_append",
                                                  void_ty, i8p_ty, i64_ty);
 
+      trc_start = module.getOrInsertFunction("___cuprof_trace_start",
+                                             void_ty, i_ty, i8p_ty, i8p_ty, i64_ty, i16_ty);
+      trc_stop = module.getOrInsertFunction("___cuprof_trace_stop",
+                                            void_ty, i_ty, i8p_ty);
     
-      trc_fill_info = module.getOrInsertFunction("__trace_fill_info",
-                                                 void_ty, i8p_ty, i8p_ty);
-      trc_copy_to_symbol = module.getOrInsertFunction("__trace_copy_to_symbol",
-                                                      void_ty, i8p_ty, i8p_ty, i8p_ty);
-      trc_touch = module.getOrInsertFunction("__trace_touch",
-                                             void_ty, i8p_ty);
-      trc_start = module.getOrInsertFunction("__trace_start",
-                                             void_ty, i8p_ty, i8p_ty, i64_ty, i16_ty);
-      trc_stop = module.getOrInsertFunction("__trace_stop",
-                                            void_ty, i8p_ty);
-    
+      cuda_get_device = module.getOrInsertFunction("cudaGetDevice",
+                                                   cuda_err_ty, ip_ty);
       cuda_memcpy_from_symbol = module.getOrInsertFunction("cudaMemcpyFromSymbol",
                                                            cuda_err_ty, i8p_ty, i8p_ty,
                                                            size_ty, size_ty, cuda_memcpy_kind_ty);
@@ -330,7 +327,7 @@ namespace cuprof {
       SmallVector<GlobalVariable*, 32> gvs;
 
   
-      // do works on kernels for access data info
+      // push access data info for each kernel to the list
       for (SmallVector<Function*, 32>::iterator kernel = kernel_list.begin();
            kernel != kernel_list.end();
            ++kernel) {
@@ -343,31 +340,11 @@ namespace cuprof {
         }
       }
 
-  
-      for (Instruction& inst : instructions(cuda_setup_func)) {
-        CallInst* callinst = dyn_cast<CallInst>(&inst);
-        if (callinst == nullptr) {
-          continue;
-        }
-        Function* callee = callinst->getCalledFunction();
-        if (!callee || callee->getName() != "__cudaRegisterFunction") {
-          continue;
-        }
+      // push the traceinfo var to the list
+      GlobalVariable *gv = getOrInsertGlobalVar(module, ty, CUPROF_TRACE_BASE_INFO);
+      gvs.push_back(gv);
 
-        // 0: ptx image, 1: wrapper, 2: name, 3: name again, 4+: ?
-        Value* wrapper_val = callinst->getOperand(1)->stripPointerCasts();
-        assert(wrapper_val != nullptr &&
-               "__cudaRegisterFunction called without wrapper");
-        Value* wrapper = dyn_cast<Function>(wrapper_val);
-        assert(wrapper != nullptr &&
-               "__cudaRegisterFunction called with something other than a wrapper");
-
-        StringRef kernel_name = wrapper->getName();
-        std::string var_name = getSymbolNameForKernel(kernel_name.str());
-        GlobalVariable *gv = getOrInsertGlobalVar(module, ty, var_name);
-        gvs.push_back(gv);
-      }
-
+      // register all items in the list
       registerVars(cuda_setup_func, gvs);
     }
 
@@ -381,23 +358,18 @@ namespace cuprof {
     void patchKernelCall(CallInst* configure_call, Instruction* launch,
                          const StringRef kernel_name) {
       assert(configure_call->getNumArgOperands() == 6);
-      Value* stream = configure_call->getArgOperand(5);
-
+      
       IRBuilder<> irb(configure_call->getNextNode());
 
-      Value* kernel_name_val = irb.CreateGlobalStringPtr(kernel_name);
+      
+      Value* device_num_alloc = irb.CreateAlloca(i_ty);
+      Value* cuda_get_device_args[] = {device_num_alloc};
+      irb.CreateCall(cuda_get_device, cuda_get_device_args);
+      Value* device_num = irb.CreateLoad(i_ty, device_num_alloc);
 
-      // try adding in global symbol + cuda registration
-      Module& module = *configure_call->getModule();
-
-      Type* gv_ty = trace_info_ty;
-      std::string kernel_symbol_name = getSymbolNameForKernel(kernel_name.str());
-
-      GlobalVariable* gv = getOrInsertGlobalVar(module, gv_ty, kernel_symbol_name);
-
-      Value* gv_ptr = irb.CreateBitCast(gv, i8p_ty);
+      Value* stream = configure_call->getArgOperand(5);
       Value* stream_ptr = irb.CreateBitCast(stream, i8p_ty);
-
+      Value* kernel_name_val = irb.CreateGlobalStringPtr(kernel_name);
 
 
       // Thread block size of the current kernel call
@@ -434,25 +406,12 @@ namespace cuprof {
 
     
 
-      Value* trace_touch_args[] = {stream_ptr};
-      Value* trace_start_args[] = {stream_ptr, kernel_name_val, grid_dim, cta_size};
-      irb.CreateCall(trc_touch, trace_touch_args);
+      Value* trace_start_args[] = {device_num, stream_ptr, kernel_name_val, grid_dim, cta_size};
       irb.CreateCall(trc_start, trace_start_args);
-
-      const DataLayout& dat_layout = configure_call->getParent()->getParent()->getParent()->getDataLayout();
-
-      size_t buflen = dat_layout.getTypeStoreSize(gv_ty);
-      Value* buf_info = irb.CreateAlloca(i8_ty, irb.getInt32(buflen));
-    
-      Value* trace_fill_info_args[] = {buf_info, stream_ptr};
-      irb.CreateCall(trc_fill_info, trace_fill_info_args);
-    
-      Value* trace_copy_to_symbol_args[] = {stream_ptr, gv_ptr, buf_info};
-      irb.CreateCall(trc_copy_to_symbol, trace_copy_to_symbol_args);
 
       irb.SetInsertPoint(launch->getNextNode());
     
-      Value* trace_stop_args[] = {stream_ptr};
+      Value* trace_stop_args[] = {device_num, stream_ptr};
       irb.CreateCall(trc_stop, trace_stop_args);
     }
   
@@ -495,8 +454,7 @@ namespace cuprof {
       }
 
     
-      // register global variables for trace info for all kernels registered
-      // in this module
+      // register global variables of trace info for all kernels registered in this module
       appendGlobalCtorDtor(module, dyn_cast<Function>(accdat_ctor.getCallee()), GLOBAL_CTOR);
       appendGlobalCtorDtor(module, dyn_cast<Function>(accdat_dtor.getCallee()), GLOBAL_DTOR);
 

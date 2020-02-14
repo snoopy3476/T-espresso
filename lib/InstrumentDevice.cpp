@@ -57,11 +57,14 @@ namespace cuprof {
 
   
     struct TraceInfoValues {
-      Value* allocs;
-      Value* commits;
+      Value* alloc;
+      Value* commit;
+      Value* count;
       Value* records;
+      Value* grid;
       Value* cta_serial;
       Value* warpv;
+      Value* lane;
       Value* filter_sm;
       Value* filter_warpp;
       Value* filter_sm_count;
@@ -80,11 +83,15 @@ namespace cuprof {
     Type* i16_ty = nullptr;
     Type* i32_ty = nullptr;
     Type* i64_ty = nullptr;
+    Type* trace_base_info_ty = nullptr;
+    Type* trace_info_ty = nullptr;
+    Type* trace_info_pty = nullptr;
   
     FunctionType* i32_fty = nullptr;
     FunctionType* i64_fty = nullptr;
 
     FunctionCallee trace_call = nullptr;
+    FunctionCallee trace_ret_call = nullptr;
     FunctionCallee filter_call = nullptr;
     FunctionCallee filter_volatile_call = nullptr;
 
@@ -108,17 +115,30 @@ namespace cuprof {
       i64_ty = Type::getInt64Ty(ctx);
       i32_fty = FunctionType::get(i32_ty, false);
       i64_fty = FunctionType::get(i64_ty, false);
+      
+      //trace_base_info_ty = getTraceBaseInfoType(ctx);
+      trace_info_ty = getTraceInfoType(ctx);
+      trace_info_pty = trace_info_ty->getPointerTo();
     }
-  
   
     void findOrInsertRuntimeFunctions(Module& module) {
     
       trace_call =
         module.getOrInsertFunction("___cuprof_trace", void_ty,
-                                   i8p_ty, i8p_ty, i8p_ty, i8_ty,
-                                   i64_ty, i64_ty, i32_ty, i32_ty,
-                                   i32_ty, i32_ty, i16_ty, i8_ty);
+                                   i32p_ty, i32p_ty, i32p_ty, i8p_ty,
+                                   i64_ty, i64_ty, i64_ty,
+                                   i32_ty, i32_ty, i32_ty, i32_ty, i32_ty,
+                                   i16_ty,
+                                   i8_ty, i8_ty);
       if (!trace_call.getCallee()) {
+        report_fatal_error("No ___cuprof_trace declaration found");
+      }
+    
+      trace_ret_call =
+        module.getOrInsertFunction("___cuprof_trace_ret", void_ty,
+                                   i32p_ty, i32p_ty,
+                                   i32_ty);
+      if (!trace_ret_call.getCallee()) {
         report_fatal_error("No ___cuprof_trace declaration found");
       }
     
@@ -166,21 +186,26 @@ namespace cuprof {
     }
 
   
-    GlobalVariable* insertGlobalVariableExtern(Module& module, Type* ty,
-                                               const Twine& name) {
-      Constant* zero = Constant::getNullValue(ty);
-      GlobalVariable* gv = new GlobalVariable(module, ty, false,
-                                              GlobalValue::ExternalLinkage,
-                                              zero, name, nullptr,
-                                              GlobalVariable::NotThreadLocal,
-                                              1, true);
-      gv->setAlignment(1);
-      gv->setDSOLocal(true);
+    GlobalVariable* getOrInsertGlobalVariableExtern(Module& module, Type* ty,
+                                               const char* name) {
+      GlobalVariable* gv = module.getNamedGlobal(name);
+
+      if (!gv) {
+        Constant* zero = Constant::getNullValue(ty);
+        gv = new GlobalVariable(module, ty, false,
+                                GlobalValue::ExternalLinkage,
+                                zero, name, nullptr,
+                                GlobalVariable::NotThreadLocal,
+                                1, true);
+        gv->setAlignment(1);
+        gv->setDSOLocal(true);
+      }
+      
       return gv;
     }
 
   
-    GlobalVariable* setDebugData(Function* func, std::vector<char> input) {
+    GlobalVariable* setDebugData(Function* func, std::vector<byte> input) {
 
       Module& module = *func->getParent();
       LLVMContext& ctx = module.getContext();
@@ -198,7 +223,7 @@ namespace cuprof {
       }
     
       unsigned int data_len = input.size();
-      ArrayRef<char> data_arr_ref = ArrayRef<char>(input.data(), data_len);
+      ArrayRef<byte> data_arr_ref = ArrayRef<byte>(input.data(), data_len);
       Constant* var_init = ConstantDataArray::get(ctx, data_arr_ref);
       debugdata = new GlobalVariable(module, var_init->getType(), false,
                                      GlobalValue::ExternalLinkage,
@@ -213,7 +238,7 @@ namespace cuprof {
     }
 
   
-    bool appendAndGetKernelDebugData(Function* kernel, std::vector<char>& debugdata,
+    bool appendAndGetKernelDebugData(Function* kernel, std::vector<byte>& debugdata,
                                      std::vector<Instruction*> inst_list) {
       LLVMContext& ctx = kernel->getParent()->getContext();
       bool debuginfo_not_found = false;
@@ -273,8 +298,8 @@ namespace cuprof {
       kernel_header->insts_count = instid;
 
     
-      char* kernel_data =
-        (char* ) malloc(get_max_header_bytes_after_serialize(kernel_header));
+      byte* kernel_data =
+        (byte* ) malloc(get_max_header_bytes_after_serialize(kernel_header));
       size_t kernel_data_size = header_serialize(kernel_data, kernel_header);
       debugdata.reserve(debugdata.size() + kernel_data_size);
       debugdata.insert(debugdata.end(), kernel_data,
@@ -308,15 +333,22 @@ namespace cuprof {
       return irb.CreateCall(warpp_asm);
     }
 
-    Value* getLaneId(IRBuilder<> irb) {
+    Value* getLane(IRBuilder<> irb) {
       InlineAsm* laneid_asm = InlineAsm::get(i32_fty,
                                              "mov.u32 $0, %laneid;", "=r", false,
                                              InlineAsm::AsmDialect::AD_ATT );
       return irb.CreateCall(laneid_asm);
     }
 
-    Value* getCtaSerial(IRBuilder<> irb) {
-    
+    Value* getGrid(IRBuilder<> irb) {
+      InlineAsm* gridid_asm = InlineAsm::get(i64_fty,
+                                             "mov.u64 $0, %gridid;", "=l", false,
+                                             InlineAsm::AsmDialect::AD_ATT );
+      return irb.CreateCall(gridid_asm);
+    }
+
+    void getCta(IRBuilder<> irb, Value* (* cta)[3]) {
+
       InlineAsm* cta_asm[3] = {
         InlineAsm::get(i32_fty, "mov.u32 $0, %ctaid.x;", "=r", false,
                        InlineAsm::AsmDialect::AD_ATT ),
@@ -325,13 +357,15 @@ namespace cuprof {
         InlineAsm::get(i32_fty, "mov.u32 $0, %ctaid.z;", "=r", false,
                        InlineAsm::AsmDialect::AD_ATT )
       };
-      Value* cta[3];
+      
       for (int i = 0; i < 3; i++) {
-        cta[i] = irb.CreateCall(cta_asm[i]);
-        cta[i] = irb.CreateZExt(cta[i], i64_ty);
+        (*cta)[i] = irb.CreateCall(cta_asm[i]);
+        (*cta)[i] = irb.CreateZExt((*cta)[i], i64_ty);
       }
-    
+    }
 
+    Value* getCtaSerial(IRBuilder<> irb, Value* cta[3]) {
+    
       // cta_serial: <32-bit: cta_x> <16-bit: cta_y> <16-bit: cta_z>
       Value* cta_serial_x = irb.CreateShl(cta[0], 32);
       Value* cta_serial_y = irb.CreateAnd(cta[1], 0xFFFF);
@@ -343,6 +377,32 @@ namespace cuprof {
         );
 
       return cta_serial;
+    }
+
+    Value* getCtaIndex(IRBuilder<> irb, Value* cta[3]) {
+
+      
+      InlineAsm* ncta_asm[2] = {
+        InlineAsm::get(i32_fty, "mov.u32 $0, %nctaid.x;", "=r", false,
+                       InlineAsm::AsmDialect::AD_ATT ),
+        InlineAsm::get(i32_fty, "mov.u32 $0, %nctaid.y;", "=r", false,
+                       InlineAsm::AsmDialect::AD_ATT )
+      };
+      
+      Value* ncta[2];
+      for (int i = 0; i < 2; i++) {
+        ncta[i] = irb.CreateCall(ncta_asm[i]);
+        ncta[i] = irb.CreateZExt(ncta[i], i64_ty);
+      }
+
+      // cta_i: cta_x + (cta_y * ncta_x) + (cta_z * ncta_x * ncta_y)
+      Value* first = cta[0];
+      Value* second = irb.CreateMul(cta[2], ncta[1]);
+      second = irb.CreateAdd(second, cta[1]);
+      second = irb.CreateMul(second, ncta[0]);
+      Value* cta_i = irb.CreateAdd(first, second);
+
+      return irb.CreateTrunc(cta_i, i32_ty);;
     }
 
     Value* getWarpv(IRBuilder<> irb) {
@@ -555,43 +615,60 @@ namespace cuprof {
   
   
     IRBuilderBase::InsertPoint setupTraceInfo(Function* kernel, TraceInfoValues* info) {
-      LLVMContext& ctx = kernel->getParent()->getContext();
-      Type* trace_info_ty = getTraceInfoType(ctx);
-
       IRBuilder<> irb(kernel->getEntryBlock().getFirstNonPHI());
 
       Module& module = *kernel->getParent();
-      std::string symbol_name = getSymbolNameForKernel(kernel->getName().str());
 
 
     
-      // get warpv (virtual warp id)
+      // get basic info
+      Value* lane = getLane(irb);
       Value* warpv = getWarpv(irb);
-      Value* cta_serial = getCtaSerial(irb);
-      Value* sm = getSm(irb);
+      Value* cta[3];
+      getCta(irb, &cta);
+      Value* cta_serial = getCtaSerial(irb, cta);
+      Value* cta_i = getCtaIndex(irb, cta);
+      Value* grid = getGrid(irb);
 
     
 
-      // initialize allocs / commits / records
+      // initialize alloc / commit / count / records
     
-      GlobalVariable* gv = insertGlobalVariableExtern(module, trace_info_ty, symbol_name);
-      assert(gv != nullptr);
+      //GlobalVariable* gv_tmp = getOrInsertGlobalVariableExtern(module, trace_base_info_ty, CUPROF_TRACE_BASE_INFO);
+      //assert(gv_tmp != nullptr);
+      
+      //Value* trace_info = irb.CreateAlloca(trace_info_ty);
+      //irb.CreateCall(allocate_call, {trace_info});
+      Value* trace_info = getOrInsertGlobalVariableExtern(module, trace_info_ty, CUPROF_TRACE_BASE_INFO);
 
-      Value* slot = irb.CreateAnd(sm, irb.getInt32(SLOTS_NUM - 1));
+      
+
+      
+      //////////////////////////////////
+
+      
+      Value* slot = irb.CreateAnd(cta_i, irb.getInt32(SLOTS_PER_STREAM_IN_A_DEV - 1));
     
       Value* base_i = irb.CreateMul(slot, ConstantInt::get(i32_ty, CACHELINE));
-      Value* slot_i = irb.CreateMul(slot, ConstantInt::get(i32_ty, SLOTS_SIZE));
+      Value* slot_i = irb.CreateMul(slot, ConstantInt::get(i32_ty, RECORDS_PER_SLOT));
       slot_i = irb.CreateMul(slot_i, ConstantInt::get(i32_ty, RECORD_SIZE));
 
-      Value* allocs_ptr = irb.CreateStructGEP(nullptr, gv, 0);
-      Value* allocs = irb.CreateLoad(allocs_ptr, "allocs");
-      allocs = irb.CreateInBoundsGEP(i8_ty, allocs, base_i);
+      Value* allocs_ptr = irb.CreateStructGEP(nullptr, trace_info, 0);
+      Value* alloc = irb.CreateLoad(allocs_ptr, "alloc");
+      alloc = irb.CreateInBoundsGEP(i8_ty, alloc, base_i);
+      alloc = irb.CreateBitCast(alloc, i32p_ty);
 
-      Value* commits_ptr = irb.CreateStructGEP(nullptr, gv, 1);
-      Value* commits = irb.CreateLoad(commits_ptr, "commits");
-      commits = irb.CreateInBoundsGEP(i8_ty, commits, base_i);
+      Value* commits_ptr = irb.CreateStructGEP(nullptr, trace_info, 1);
+      Value* commit = irb.CreateLoad(commits_ptr, "commit");
+      commit = irb.CreateInBoundsGEP(i8_ty, commit, base_i);
+      commit = irb.CreateBitCast(commit, i32p_ty);
+      
+      Value* counts_ptr = irb.CreateStructGEP(nullptr, trace_info, 2);
+      Value* count = irb.CreateLoad(counts_ptr, "count");
+      count = irb.CreateInBoundsGEP(i8_ty, count, base_i);
+      count = irb.CreateBitCast(count, i32p_ty);
 
-      Value* records_ptr = irb.CreateStructGEP(nullptr, gv, 2);
+      Value* records_ptr = irb.CreateStructGEP(nullptr, trace_info, 3);
       Value* records = irb.CreateLoad(records_ptr, "records");
       records = irb.CreateInBoundsGEP(i8_ty, records, slot_i);
 
@@ -643,11 +720,14 @@ namespace cuprof {
 
       // set info
     
-      info->allocs = allocs;
-      info->commits = commits;
+      info->alloc = alloc;
+      info->commit = commit;
+      info->count = count;
       info->records = records;
+      info->grid = grid;
       info->cta_serial = cta_serial;
       info->warpv = warpv;
+      info->lane = lane;
       info->filter_sm = filter_sm;
       info->filter_warpp = filter_warpp;
       info->filter_sm_count = filter_sm_count;
@@ -727,14 +807,16 @@ namespace cuprof {
         Value* to_be_traced = info->to_be_traced;
         insertFilterVolatile(irb, &to_be_traced, info, sm, warpp);
       
-      
         Value* trace_call_args[] = {
-          info->records, info->allocs, info->commits,
-          to_be_traced,
-          addr, info->cta_serial,
-          instid, info->warpv,
+          info->alloc, info->commit,
+          info->count, info->records,
+          addr,
+          info->grid, info->cta_serial,
+          info->warpv, info->lane,
+          instid,
           sm, warpp,
-          size, type
+          size,
+          type, to_be_traced
         };
         irb.CreateCall(trace_call, trace_call_args);
       }
@@ -765,20 +847,22 @@ namespace cuprof {
     
     
       Value* trace_call_args[] = {
-        info->records, info->allocs, info->commits,
-        to_be_traced,
-        addr, info->cta_serial,
-        instid, info->warpv,
-        sm, warpp,
-        size, type
+          info->alloc, info->commit,
+          info->count, info->records,
+          addr,
+          info->grid, info->cta_serial,
+          info->warpv, info->lane,
+          instid,
+          sm, warpp,
+          size,
+          type, to_be_traced
       };
+      
       irb.CreateCall(trace_call, trace_call_args);
 
 
       // trace ret
-      Value* laneid = getLaneId(irb);
-      Instruction::CastOps laneid_castop = CastInst::getCastOpcode(laneid, false, i64_ty, false);
-      addr = irb.CreateCast(laneid_castop, laneid, i64_ty);
+      addr = ConstantInt::get(i64_ty, 0);
       type = ConstantInt::get(i8_ty, RECORD_RETURN);
     
       for (Instruction* inst : retinsts) {
@@ -798,14 +882,25 @@ namespace cuprof {
         insertFilterVolatile(irb, &to_be_traced, info, sm, warpp);
 
         Value* trace_call_args[] = {
-          info->records, info->allocs, info->commits,
-          to_be_traced,
-          addr, info->cta_serial,
-          instid, info->warpv,
+          info->alloc, info->commit,
+          info->count, info->records,
+          addr,
+          info->grid, info->cta_serial,
+          info->warpv, info->lane,
+          instid,
           sm, warpp,
-          size, type
+          size,
+          type, to_be_traced
         };
         irb.CreateCall(trace_call, trace_call_args);
+
+        
+        Value* trace_ret_call_args[] = {
+          info->commit, info->count,
+          info->lane
+        };
+        irb.CreateCall(trace_ret_call, trace_ret_call_args);
+        
       }
     }
 
@@ -833,7 +928,7 @@ namespace cuprof {
     
 
       bool debug_without_problem = true; // All debug data is written without problem
-      std::vector<char> debugdata;
+      std::vector<byte> debugdata;
       for (Function* kernel : getKernelFunctions(module)) {
 
       
