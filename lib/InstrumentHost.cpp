@@ -59,12 +59,14 @@ namespace cuprof {
     Type* i32_ty = nullptr;
     Type* i64_ty = nullptr;
 
-    FunctionCallee accdat_ctor = nullptr;
-    FunctionCallee accdat_dtor = nullptr;
-    FunctionCallee accdat_append = nullptr;
+    FunctionCallee cuprof_init = nullptr;
+    FunctionCallee cuprof_term = nullptr;
+    FunctionCallee cuprof_gvsym_set_up = nullptr;
+    FunctionCallee cuprof_kernel_set_up = nullptr;
     FunctionCallee trc_start = nullptr;
     FunctionCallee trc_stop = nullptr;
     FunctionCallee cuda_get_device = nullptr;
+    FunctionCallee cuda_memcpy_to_symbol = nullptr;
     FunctionCallee cuda_memcpy_from_symbol = nullptr;
     FunctionCallee cuda_get_symbol_size = nullptr;
 
@@ -99,25 +101,40 @@ namespace cuprof {
   
     void findOrInsertRuntimeFunctions(Module& module) {
     
-      accdat_ctor = module.getOrInsertFunction("___cuprof_accdat_ctor",
-                                               void_ty);
-      accdat_dtor = module.getOrInsertFunction("___cuprof_accdat_dtor",
-                                               void_ty);
-      accdat_append = module.getOrInsertFunction("___cuprof_accdat_append",
-                                                 void_ty, i8p_ty, i64_ty);
+      cuprof_init =
+        module.getOrInsertFunction("___cuprof_init",
+                                   void_ty);
+      cuprof_term =
+        module.getOrInsertFunction("___cuprof_term",
+                                   void_ty);
+      cuprof_gvsym_set_up =
+        module.getOrInsertFunction("___cuprof_gvsym_set_up",
+                                   void_ty, i8p_ty);
+      cuprof_kernel_set_up =
+        module.getOrInsertFunction("___cuprof_kernel_set_up",
+                                   void_ty, i8p_ty, i8p_ty);
 
-      trc_start = module.getOrInsertFunction("___cuprof_trace_start",
-                                             void_ty, i_ty, i8p_ty, i8p_ty, i64_ty, i16_ty);
-      trc_stop = module.getOrInsertFunction("___cuprof_trace_stop",
-                                            void_ty, i_ty, i8p_ty);
+      trc_start =
+        module.getOrInsertFunction("___cuprof_trace_start",
+                                   void_ty, i_ty, i8p_ty, i8p_ty, i64_ty, i16_ty);
+      trc_stop =
+        module.getOrInsertFunction("___cuprof_trace_stop",
+                                   void_ty, i_ty, i8p_ty);
     
-      cuda_get_device = module.getOrInsertFunction("cudaGetDevice",
-                                                   cuda_err_ty, ip_ty);
-      cuda_memcpy_from_symbol = module.getOrInsertFunction("cudaMemcpyFromSymbol",
-                                                           cuda_err_ty, i8p_ty, i8p_ty,
-                                                           size_ty, size_ty, cuda_memcpy_kind_ty);
-      cuda_get_symbol_size = module.getOrInsertFunction("cudaGetSymbolSize",
-                                                        cuda_err_ty, i8p_ty, i8p_ty);
+      cuda_get_device =
+        module.getOrInsertFunction("cudaGetDevice",
+                                   cuda_err_ty, ip_ty);
+      cuda_memcpy_to_symbol =
+        module.getOrInsertFunction("cudaMemcpyToSymbol",
+                                   cuda_err_ty, i8p_ty, i8p_ty,
+                                   size_ty, size_ty, cuda_memcpy_kind_ty);
+      cuda_memcpy_from_symbol =
+        module.getOrInsertFunction("cudaMemcpyFromSymbol",
+                                   cuda_err_ty, i8p_ty, i8p_ty,
+                                   size_ty, size_ty, cuda_memcpy_kind_ty);
+      cuda_get_symbol_size =
+        module.getOrInsertFunction("cudaGetSymbolSize",
+                                   cuda_err_ty, i8p_ty, i8p_ty);
     }
 
 
@@ -141,7 +158,6 @@ namespace cuprof {
       // This happens if a kernel is called in a module it is not registered in.
       Constant* zero = Constant::getNullValue(ty);
       gv = new GlobalVariable(module, ty, false, GlobalValue::LinkOnceAnyLinkage, zero, name);
-      gv->setAlignment(8);
       assert(gv != nullptr);
       return gv;
     }
@@ -217,13 +233,27 @@ namespace cuprof {
       return true;
     }
 
-  
+    ///////////////////////////////////////////////////////////////
     bool registerFuncToGetDebugData(Module& module, const std::string kernel_name) {
 
-      std::string varname = getSymbolNameForKernel(kernel_name, SYMBOL_DATA_VAR);
-      std::string funcname = getSymbolNameForKernel(kernel_name, SYMBOL_DATA_FUNC);
+      std::string varname_kdata = getSymbolNameForKernel(kernel_name, CUPROF_SYMBOL_DATA_VAR);
+      std::string varname_kid = getSymbolNameForKernel(kernel_name, CUPROF_SYMBOL_KERNEL_ID);
+      std::string funcname = getSymbolNameForKernel(kernel_name, CUPROF_SYMBOL_DATA_FUNC);
 
-      // add function
+      
+      // get symbols for arguments of a function to be called
+      GlobalVariable* gv_kdata =
+        getOrInsertGlobalVar(module, i8p_ty, varname_kdata.c_str());
+      //Value* kdata_sym = irb.CreatePointerCast(gv_kdata, i8p_ty);
+      GlobalVariable* gv_kid =
+        getOrInsertGlobalVar(module, i8p_ty, varname_kid.c_str());
+      //Value* kid_sym = irb.CreatePointerCast(gv_kid, i8p_ty);
+
+      registerFuncToGlobalCtor(module, cuprof_kernel_set_up, {gv_kdata, gv_kid}, funcname);
+
+      return true;
+      /*
+      // add a function
       LLVMContext& ctx = module.getContext();
       FunctionCallee func_callee = module.getOrInsertFunction(funcname.c_str(), void_ty);
       Function* func = dyn_cast<Function>(func_callee.getCallee());
@@ -232,42 +262,34 @@ namespace cuprof {
     
 
 
-      // add entry block for function
+      // add entry block for the function
       BasicBlock* block = BasicBlock::Create(ctx, "entry", func);
       IRBuilder<> irb(block);
 
-      GlobalVariable* var_link = module.getNamedGlobal(varname);
-      if (var_link == nullptr) {
-        var_link = new GlobalVariable(module, i8p_ty, false,
-                                      GlobalValue::LinkOnceAnyLinkage,
-                                      Constant::getNullValue(i8p_ty),
-                                      varname.c_str());
-      }
-      Value* var_sym = irb.CreatePointerCast(var_link, i8p_ty);
 
+      
+      //Value* varlen_alloca = irb.CreateAlloca(size_ty);
+      //Value* varlen_voidptr = irb.CreatePointerCast(varlen_alloca, i8p_ty);
+      //irb.CreateStore(ConstantInt::get(size_ty, 0), varlen_alloca);
     
-      Value* varlen_alloca = irb.CreateAlloca(size_ty);
-      Value* varlen_voidptr = irb.CreatePointerCast(varlen_alloca, i8p_ty);
-      irb.CreateStore(ConstantInt::get(size_ty, 0), varlen_alloca);
+      //Value* cuda_get_symbol_size_args[] = {varlen_voidptr, var_sym};
+      //irb.CreateCall(cuda_get_symbol_size, cuda_get_symbol_size_args);
     
-      Value* cuda_get_symbol_size_args[] = {varlen_voidptr, var_sym};
-      irb.CreateCall(cuda_get_symbol_size, cuda_get_symbol_size_args);
-    
-      Value* varlen_val = irb.CreateLoad(size_ty, varlen_alloca);
+      //Value* varlen_val = irb.CreateLoad(size_ty, varlen_alloca);
 
 
     
-      Value* var_alloca = irb.CreateAlloca(i8_ty, varlen_val);
-      Value* cuda_memcpy_from_symbol_args[] = {
-        var_alloca, var_sym,
-        varlen_val,
-        ConstantInt::get(size_ty, 0),
-        ConstantInt::get(cuda_memcpy_kind_ty, cudaMemcpyDeviceToHost)
-      };
-      irb.CreateCall(cuda_memcpy_from_symbol, cuda_memcpy_from_symbol_args);
+      //Value* var_alloca = irb.CreateAlloca(i8_ty, varlen_val);
+      //Value* cuda_memcpy_from_symbol_args[] = {
+      //  var_alloca, var_sym,
+      //  varlen_val,
+      //  ConstantInt::get(size_ty, 0),
+      //  ConstantInt::get(cuda_memcpy_kind_ty, cudaMemcpyDeviceToHost)
+      //};
+      //irb.CreateCall(cuda_memcpy_from_symbol, cuda_memcpy_from_symbol_args);
 
-      Value* accdat_append_args[] = {var_alloca, varlen_val};
-      irb.CreateCall(accdat_append, accdat_append_args);
+      Value* cuprof_kernel_set_up_args[] = {kdata_sym, kid_sym};
+      irb.CreateCall(cuprof_kernel_set_up, cuprof_kernel_set_up_args);
     
       irb.CreateRetVoid();
 
@@ -276,6 +298,47 @@ namespace cuprof {
       // append created function to global ctor
       appendGlobalCtorDtor(module, func, GLOBAL_CTOR, GLOBAL_CDTOR_DEFAULT_PRIORITY + 1);
     
+      
+      return true;
+      */
+    }
+
+    
+    bool registerFuncToGlobalCtor(Module& module,
+                                  FunctionCallee func_callee, ArrayRef<Value*> args,
+                                  const Twine& ctor_name) {
+
+      // add a function
+      LLVMContext& ctx = module.getContext();
+      FunctionCallee ctor_callee =
+        module.getOrInsertFunction(ctor_name.getSingleStringRef(), void_ty);
+      Function* ctor = dyn_cast<Function>(ctor_callee.getCallee());
+      if (!ctor || !ctor->empty()) return false;
+      ctor->setCallingConv(CallingConv::C);
+
+
+      
+      // add entry block for the function
+      BasicBlock* block = BasicBlock::Create(ctx, "entry", ctor);
+      IRBuilder<> irb(block);
+
+      
+      FunctionType* func_callee_ty = func_callee.getFunctionType();
+      int args_count = func_callee_ty->getNumParams();
+      std::vector<Value*> args_casted;
+      for (int i = 0; i < args_count; i++) {
+        args_casted.push_back(
+          irb.CreateBitOrPointerCast(args[i], func_callee_ty->getParamType(i))
+          );
+      }
+      
+      
+      irb.CreateCall(func_callee, args_casted);
+      irb.CreateRetVoid();
+
+      
+      // append created function to global ctor
+      appendGlobalCtorDtor(module, ctor, GLOBAL_CTOR, GLOBAL_CDTOR_DEFAULT_PRIORITY + 1);
     
       return true;
     }
@@ -320,28 +383,38 @@ namespace cuprof {
     }
 
 
-    void createAndRegisterTraceVars(Function* cuda_setup_func, Type* ty,
+    void createAndRegisterTraceVars(Function* cuda_setup_func,
                                     SmallVector<Function*, 32> kernel_list) {
       Module& module = *cuda_setup_func->getParent();
       //SmallVector<Function*, 8> registeredKernels;
       SmallVector<GlobalVariable*, 32> gvs;
 
   
-      // push access data info for each kernel to the list
+      // push metadata for each kernel to the list
       for (SmallVector<Function*, 32>::iterator kernel = kernel_list.begin();
            kernel != kernel_list.end();
            ++kernel) {
-        StringRef kernel_name = (*kernel)->getName();
-        registerFuncToGetDebugData(module, kernel_name.str());
+        StringRef kernel_name_ref = (*kernel)->getName();
+        std::string kernel_name = kernel_name_ref.str();
+        registerFuncToGetDebugData(module, kernel_name); /////////////////////////
 
-        std::string accdat_var_str = getSymbolNameForKernel(kernel_name.str(), SYMBOL_DATA_VAR);
-        if (GlobalVariable* accdat_var_gv = module.getNamedGlobal(accdat_var_str)) {
-          gvs.push_back(accdat_var_gv);
+        std::string kdata_name = getSymbolNameForKernel(kernel_name,
+                                                        CUPROF_SYMBOL_DATA_VAR);
+        if (GlobalVariable* gv_kdata = module.getNamedGlobal(kdata_name)) {
+          gvs.push_back(gv_kdata);
+        }
+        std::string kid_name = getSymbolNameForKernel(kernel_name,
+                                                      CUPROF_SYMBOL_KERNEL_ID);
+        if (GlobalVariable* gv_kid = module.getNamedGlobal(kid_name)) {
+          gvs.push_back(gv_kid);
         }
       }
 
       // push the traceinfo var to the list
-      GlobalVariable *gv = getOrInsertGlobalVar(module, ty, CUPROF_TRACE_BASE_INFO);
+      GlobalVariable *gv = getOrInsertGlobalVar(module, trace_info_ty,
+                                                CUPROF_TRACE_BASE_INFO);
+      
+      registerFuncToGlobalCtor(module, cuprof_gvsym_set_up, {gv}, "___cuprof_base_name");
       gvs.push_back(gv);
 
       // register all items in the list
@@ -455,8 +528,16 @@ namespace cuprof {
 
     
       // register global variables of trace info for all kernels registered in this module
-      appendGlobalCtorDtor(module, dyn_cast<Function>(accdat_ctor.getCallee()), GLOBAL_CTOR);
-      appendGlobalCtorDtor(module, dyn_cast<Function>(accdat_dtor.getCallee()), GLOBAL_DTOR);
+      appendGlobalCtorDtor(module,
+                           dyn_cast<Function>(cuprof_init.getCallee()),
+                           GLOBAL_CTOR);
+      appendGlobalCtorDtor(module,
+                           dyn_cast<Function>(cuprof_term.getCallee()),
+                           GLOBAL_DTOR);
+      
+      //GlobalVariable *gv = getOrInsertGlobalVar(module, trace_info_ty,
+      //                                          CUPROF_TRACE_BASE_INFO);
+      //registerFuncToGlobalCtor(module, cuprof_gvsym_set_up, {gv}, "___cuprof_base_name");
 
 
     
@@ -466,7 +547,7 @@ namespace cuprof {
     
       Function* cuda_setup_func = module.getFunction("__cuda_register_globals");
       if (cuda_setup_func != nullptr) {
-        createAndRegisterTraceVars(cuda_setup_func, trace_info_ty, kernel_list);
+        createAndRegisterTraceVars(cuda_setup_func, kernel_list);
       }
 
     

@@ -32,7 +32,7 @@ namespace cuprof {
     // Register pass according to args
     std::unique_ptr<clang::ASTConsumer>
     CreateASTConsumer(clang::CompilerInstance&, StringRef) override {
-      return make_unique<clang::ASTConsumer>();
+      return std::make_unique<clang::ASTConsumer>();
     }
 
     

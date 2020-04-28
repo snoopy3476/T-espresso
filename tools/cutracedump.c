@@ -29,7 +29,7 @@
 #include <stdlib.h>
 
 #define die(...) do {                           \
-    fprintf(stderr, __VA_ARGS__);                \
+    fprintf(stderr, __VA_ARGS__);               \
     exit(1);                                    \
   } while(0)
 
@@ -81,97 +81,91 @@ int main(int argc, char** argv) {
   uint16_t cta_size = 0;
   cta_t grid_dim = {0};
 
-  trace_header_kernel_t* kernel_info;  
   while (trace_next(trace) == 0) {
 
-    if (trace->new_kernel) {
-      kernel_info = trace->kernel_accdat[trace->kernel_i];
-      printf("K %s\n", kernel_info->kernel_name);
-      grid_dim = trace->grid_dim;
-      cta_size = trace->cta_size;
-    } else {
-      trace_record_t* r = &trace->record;
-      if (quiet) {
-        continue;
-      }
+    trace_record_t* r = &trace->record;
+    if (quiet) {
+      continue;
+    }
+      
+    trace_header_kernel_t* kernel_info = trace->kernel_accdat[r->kernid];
 
-      char trace_type;
-      switch(r->type) {
-      case RECORD_EXECUTE:
-      case RECORD_RETURN:
-        trace_type = 'T';
-        break;
+    char trace_type;
+    switch(r->type) {
+    case RECORD_EXECUTE:
+    case RECORD_RETURN:
+      trace_type = 'T';
+      break;
 
-      case RECORD_LOAD:
-      case RECORD_STORE:
-      case RECORD_ATOMIC:
-        trace_type = 'M';
-        break;
+    case RECORD_LOAD:
+    case RECORD_STORE:
+    case RECORD_ATOMIC:
+      trace_type = 'M';
+      break;
 
-      default:
-        trace_type = '?';
-        break;
-      }
+    default:
+      trace_type = '?';
+      break;
+    }
       
         
       
-      printf("%c %s"
-             " %" PRIu64
-             " %" PRIu32 "/%" PRIu32
-             " %" PRIu16 "/%" PRIu16
-             " %" PRIu16 "/%" PRIu16
-             " %" PRIu32
-             " %" PRIu16
-             " %" PRIu32 " %" PRIu32
-             " %015" PRIu64,
-             trace_type, OP_TYPE_NAMES[r->type],
-             r->grid,
-             r->ctaid.x, grid_dim.x,
-             r->ctaid.y, grid_dim.y,
-             r->ctaid.z, grid_dim.z,
-             r->warpv,
-             cta_size,
-             r->sm, r->warpp,
-             r->clock);
+    printf("%c %s"
+           " %" PRIu64
+           " %" PRIu32 "/%" PRIu32
+           " %" PRIu16 "/%" PRIu16
+           " %" PRIu16 "/%" PRIu16
+           " %" PRIu32
+           " %" PRIu16
+           " %" PRIu32 " %" PRIu32
+           " %015" PRIu64,
+           trace_type, OP_TYPE_NAMES[r->type],
+           r->grid,
+           r->ctaid.x, grid_dim.x,
+           r->ctaid.y, grid_dim.y,
+           r->ctaid.z, grid_dim.z,
+           r->warpv,
+           cta_size,
+           r->sm, r->warpp,
+           r->clock);
       
 
-      // print mem access info
-      if (trace_type == 'M') {
-        trace_header_inst_t* inst_info = &kernel_info->insts[r->instid];
+    // print mem access info
+    if (trace_type == 'M') {
+      trace_header_inst_t* inst_info = &kernel_info->insts[r->instid];
 
-        // size
-        printf(" %" PRIu32, r->req_size);
+      // size
+      printf(" %" PRIu32, r->req_size);
 
-        for (int32_t addr_i = 0; addr_i < r->addr_len; addr_i++) {
-          trace_record_addr_t* acc_addr = &r->addr_unit[addr_i];
+      for (int32_t addr_i = 0; addr_i < r->addr_len; addr_i++) {
+        trace_record_addr_t* acc_addr = &r->addr_unit[addr_i];
           
-          for (int32_t acc_i = 0; acc_i < acc_addr->count; acc_i++) {
-            uint64_t addr_cur = acc_addr->addr + (acc_addr->offset)*acc_i; // base + offset
+        for (int32_t acc_i = 0; acc_i < acc_addr->count; acc_i++) {
+          uint64_t addr_cur = acc_addr->addr + (acc_addr->offset)*acc_i; // base + offset
 
-            if (addr_cur != 0) {
-              printf(" %" PRIx64, addr_cur);
-            }
-            else {
-              printf(" (inactive)");
-            }
+          if (addr_cur != 0) {
+            printf(" %" PRIx64, addr_cur);
+          }
+          else {
+            printf(" (inactive)");
           }
         }
-
-        // inst id
-        printf(" %" PRIu32 " %s",
-               inst_info->instid, kernel_info->kernel_name);
-
-        // position at src file
-        if (inst_info->inst_filename_len > 0) {
-          printf(" %" PRIu32 " %" PRIu32 " %s",
-                 inst_info->row, inst_info->col, inst_info->inst_filename);
-        }
-
       }
 
-      printf("\n");
+      // inst id
+      printf(" %" PRIu32 " %s",
+             inst_info->instid, kernel_info->kernel_name);
+
+      // position at src file
+      if (r->kernid > 0 && inst_info->inst_filename_len > 0) {
+        printf(" %" PRIu32 " %" PRIu32 " %s",
+               inst_info->row, inst_info->col, inst_info->inst_filename);
+      }
 
     }
+
+    printf("\n");
+
   }
   if (trace_last_error != NULL) {
     die("%s\n", trace_last_error);

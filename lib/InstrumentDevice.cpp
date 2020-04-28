@@ -65,6 +65,7 @@ namespace cuprof {
       Value* cta_serial;
       Value* warpv;
       Value* lane;
+      Value* kernel;
       Value* filter_sm;
       Value* filter_warpp;
       Value* filter_sm_count;
@@ -127,7 +128,7 @@ namespace cuprof {
         module.getOrInsertFunction("___cuprof_trace", void_ty,
                                    i32p_ty, i32p_ty, i32p_ty, i8p_ty,
                                    i64_ty, i64_ty, i64_ty,
-                                   i32_ty, i32_ty, i32_ty, i32_ty, i32_ty,
+                                   i32_ty, i32_ty, i32_ty, i32_ty, i32_ty, i32_ty,
                                    i16_ty,
                                    i8_ty, i8_ty);
       if (!trace_call.getCallee()) {
@@ -197,8 +198,6 @@ namespace cuprof {
                                 zero, name, nullptr,
                                 GlobalVariable::NotThreadLocal,
                                 1, true);
-        gv->setAlignment(1);
-        gv->setDSOLocal(true);
       }
       
       return gv;
@@ -213,7 +212,7 @@ namespace cuprof {
       const StringRef kernel_name_ref = func->getName();
       const std::string kernel_name = kernel_name_ref.str();
       const std::string varname_str =
-        getSymbolNameForKernel(kernel_name, SYMBOL_DATA_VAR);
+        getSymbolNameForKernel(kernel_name, CUPROF_SYMBOL_DATA_VAR);
     
     
       GlobalVariable* debugdata = module.getNamedGlobal(varname_str.c_str());
@@ -230,14 +229,10 @@ namespace cuprof {
                                      var_init, varname_str.c_str(), nullptr,
                                      GlobalValue::ThreadLocalMode::NotThreadLocal,
                                      1, false);
-      debugdata->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
-      debugdata->setAlignment(1);
-
-
       return debugdata;
     }
 
-  
+    
     bool appendAndGetKernelDebugData(Function* kernel, std::vector<byte>& debugdata,
                                      std::vector<Instruction*> inst_list) {
       LLVMContext& ctx = kernel->getParent()->getContext();
@@ -639,7 +634,18 @@ namespace cuprof {
       
       //Value* trace_info = irb.CreateAlloca(trace_info_ty);
       //irb.CreateCall(allocate_call, {trace_info});
-      Value* trace_info = getOrInsertGlobalVariableExtern(module, trace_info_ty, CUPROF_TRACE_BASE_INFO);
+
+      
+      //std::string kernel_name = ;
+      GlobalVariable* kernel_id_ptr = getOrInsertGlobalVariableExtern(
+        module, i32_ty,
+        getSymbolNameForKernel(kernel->getName().str(),
+                               CUPROF_SYMBOL_KERNEL_ID).c_str()
+        );
+      Value* kernel_id = irb.CreateLoad(kernel_id_ptr, "kernel_id");
+      GlobalVariable* trace_info = getOrInsertGlobalVariableExtern(
+        module, trace_info_ty, CUPROF_TRACE_BASE_INFO
+        );
 
       
 
@@ -728,6 +734,7 @@ namespace cuprof {
       info->cta_serial = cta_serial;
       info->warpv = warpv;
       info->lane = lane;
+      info->kernel = kernel_id;
       info->filter_sm = filter_sm;
       info->filter_warpp = filter_warpp;
       info->filter_sm_count = filter_sm_count;
@@ -813,7 +820,7 @@ namespace cuprof {
           addr,
           info->grid, info->cta_serial,
           info->warpv, info->lane,
-          instid,
+          instid, info->kernel,
           sm, warpp,
           size,
           type, to_be_traced
@@ -852,7 +859,7 @@ namespace cuprof {
           addr,
           info->grid, info->cta_serial,
           info->warpv, info->lane,
-          instid,
+          instid, info->kernel,
           sm, warpp,
           size,
           type, to_be_traced
@@ -887,7 +894,7 @@ namespace cuprof {
           addr,
           info->grid, info->cta_serial,
           info->warpv, info->lane,
-          instid,
+          instid, info->kernel,
           sm, warpp,
           size,
           type, to_be_traced
@@ -946,17 +953,18 @@ namespace cuprof {
         IRBuilderBase::InsertPoint ipfront = setupTraceInfo(kernel, &info);
       
         debug_without_problem &= appendAndGetKernelDebugData(kernel, debugdata, accesses);
+        
+        
         if (args.trace_mem) {
           instrumentMemAccess(kernel, accesses, &info);
         }
+        
         setDebugData(kernel, debugdata);
+        debugdata.clear();
 
         if (args.trace_thread) {
           instrumentScheduling(kernel, ipfront, retinsts, &info);
         }
-
-      
-        debugdata.clear();
       }
     
       if (!debug_without_problem) {

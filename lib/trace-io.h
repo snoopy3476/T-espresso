@@ -92,10 +92,11 @@ extern "C" {
   
     uint32_t sm;
     uint32_t warpp;
-    uint32_t warpv;
     uint32_t req_size;
     uint32_t instid;
+    uint32_t kernid;
   
+    uint8_t warpv;
     uint8_t type;
     uint8_t addr_len;
   
@@ -352,8 +353,8 @@ extern "C" {
     
     record_t data = {
       RECORD_SET_INIT(
-        record->addr_len, record->type,
-        record->instid, record->warpv,
+        record->addr_len, record->type, record->instid,
+        record->kernid, record->warpv,
         record->ctaid.x, record->ctaid.y, record->ctaid.z,
         record->grid,
         record->warpp, record->sm,
@@ -373,6 +374,7 @@ extern "C" {
   static void trace_deserialize(record_t* buf, trace_record_t* record) {
     record->addr_len = RECORD_GET_ALEN(buf);
     record->type = RECORD_GET_TYPE(buf);
+    record->kernid = RECORD_GET_KERNID(buf);
     record->instid = RECORD_GET_INSTID(buf);
     record->warpv = RECORD_GET_WARP_V(buf);
   
@@ -503,69 +505,18 @@ extern "C" {
       trace_last_error = NULL;
       return 1;
     }
+    
     uint8_t ch = (buf[0] >> 56) & 0xFF;
 
-    // Entry is a kernel
-    if (ch == 0x00) {
-
-      // read header
-      uint8_t name_len = (buf[0] >> 48) & 0xFF;
-      uint16_t cta_size = (buf[0] >> 32) & 0xFFFF;
-      
-      // read grid dim
-      uint64_t grid_dim_raw;
-      if (! tracefile_read(t->tracefile, &grid_dim_raw, 8)) {
-        trace_last_error = NULL;
-        return 1;
-      }
-      cta_t grid_dim = {
-        (uint32_t) (grid_dim_raw & 0xFFFFFFFF),
-        (uint16_t) ((grid_dim_raw >> 32) & 0xFFFF),
-        (uint16_t) ((grid_dim_raw >> 48) & 0xFFFF)
-      };
-
-      // read kernel name
-      byte kernel_name[256];
-    
-      if (! tracefile_read(t->tracefile, kernel_name, name_len)) {
-        trace_last_error = "unable to read kernel name length";
-        return 1;
-      }
-
-      // find kernel index for the kernel name
-      t->kernel_i = 0; // set as unknown first
-      for (uint64_t i = 1; i <= t->kernel_count; i++) {
-        if (t->kernel_accdat[i]->kernel_name_len == name_len &&
-            memcmp(kernel_name, t->kernel_accdat[i]->kernel_name, name_len) == 0) {
-          t->kernel_i = i;
-          break;
-        }
-      }
-      
-      t->new_kernel = 1;
-      t->grid_dim = grid_dim;
-      t->cta_size = cta_size;
-      trace_last_error = NULL;
-      return 0;
+    if (! tracefile_read(t->tracefile, buf+1, RECORD_RAW_SIZE(ch) - 8)) {
+      trace_last_error = "unable to read record";
+      return 1;
     }
-
-    // Entry is a record
-    else {
-      t->new_kernel = 0;
-      if (! tracefile_read(t->tracefile, buf+1, RECORD_RAW_SIZE(ch) - 8)) {
-        trace_last_error = "unable to read record";
-        return 1;
-      }
     
-      trace_deserialize((record_t*)buf, &t->record);
-
-      // if kernel is unknown, set instid to 0
-      if (t->kernel_i == 0)
-        t->record.instid = 0;
+    trace_deserialize((record_t*)buf, &t->record);
       
-      trace_last_error = NULL;
-      return 0;
-    }
+    trace_last_error = NULL;
+    return 0;
   }
 
   static void trace_close(trace_t* t) {

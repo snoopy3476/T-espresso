@@ -60,8 +60,10 @@ extern "C" {
   ((((uint64_t*)record)[0] >> 48) & 0xFF)
 #define RECORD_GET_INSTID(record)               \
   ((((uint64_t*)record)[0] >> 32) & 0xFFFF)
+#define RECORD_GET_KERNID(record)               \
+  ((((uint64_t*)record)[0] >> 8) & 0xFFFFFF)
 #define RECORD_GET_WARP_V(record)               \
-  (((uint64_t*)record)[0] & 0xFFFFFFFF)
+  (((uint64_t*)record)[0] & 0xFF)
 
 #define RECORD_GET_CTAX(record)                 \
   (((uint64_t*)record)[1] >> 32)
@@ -76,17 +78,17 @@ extern "C" {
 #define RECORD_GET_WARP_P(record)               \
   (((uint64_t*)record)[3] >> 32)
 #define RECORD_GET_SM(record)                   \
-  (((uint64_t*)record)[3] & 0xFFFFFFFF)
+    (((uint64_t*)record)[3] & 0xFFFFFFFF)
   
 #define RECORD_GET_REQ_SIZE(record)             \
-  ((((uint64_t*)record)[4] >> 48) & 0xFFFF)
+    ((((uint64_t*)record)[4] >> 48) & 0xFFFF)
 #define RECORD_GET_CLOCK(record)                \
   (((uint64_t*)record)[4] & 0xFFFFFFFFFFFF)
   
   
 #define RECORD_ADDR_PTR(record, idx)            \
   (((uint8_t*)record) + RECORD_RAW_SIZE(idx))
-#define WARP_RECORD_ADDR_PTR(record, idx)            \
+#define WARP_RECORD_ADDR_PTR(record, idx)               \
   (((uint8_t*)record) + WARP_RECORD_RAW_SIZE(idx))
 #define RECORD_META_PTR(record, idx)            \
   (RECORD_ADDR_PTR(record, idx) + 8)
@@ -104,13 +106,14 @@ extern "C" {
     ((*(int32_t*)RECORD_META_PTR(record, idx)) >> 8)
 
 
-#define RECORD_SET_INIT_IDX_0(addr_len, type, instid, warpv)    \
-  ((((uint64_t)(addr_len)) << 56) |                             \
-   (((uint64_t)(type) & 0xFF) << 48) |                          \
-   (((uint64_t)(instid) & 0xFFFF) << 32) |                      \
-   ((uint64_t)(warpv) & 0xFFFFFFFF))
+#define RECORD_SET_INIT_IDX_0(addr_len, type, instid, kernid, warpv)    \
+  ((((uint64_t)(addr_len)) << 56) |                                     \
+   (((uint64_t)(type) & 0xFF) << 48) |                                  \
+   (((uint64_t)(instid) & 0xFFFF) << 32) |                              \
+   (((uint64_t)(kernid) & 0xFFFFFF) << 8) |                             \
+   ((uint64_t)(warpv) & 0xFF))
 #define RECORD_SET_INIT_IDX_1(cta)              \
-  ((uint64_t)(cta))
+    ((uint64_t)(cta))
 #define RECORD_SET_INIT_IDX_2(grid)             \
   ((uint64_t)(grid))
 #define RECORD_SET_INIT_IDX_3(warpp, sm)        \
@@ -121,26 +124,26 @@ extern "C" {
    (((uint64_t)(clock)) & 0xFFFFFFFFFFFF))
   
 
-#define RECORD_SET_INIT_OPT(addr_len, type, instid, warpv,      \
-                            cta,                                \
-                            grid,                               \
-                            warpp, sm,                          \
-                            req_size, clock)                    \
-  {                                                             \
-    RECORD_SET_INIT_IDX_0(addr_len, type, instid, warpv),       \
-      RECORD_SET_INIT_IDX_1(cta),                               \
-      RECORD_SET_INIT_IDX_2(grid),                              \
-      RECORD_SET_INIT_IDX_3(warpp, sm),                         \
-      RECORD_SET_INIT_IDX_4(req_size, clock)                    \
+#define RECORD_SET_INIT_OPT(addr_len, type, instid, kernid, warpv,      \
+                            cta,                                        \
+                            grid,                                       \
+                            warpp, sm,                                  \
+                            req_size, clock)                            \
+  {                                                                     \
+    RECORD_SET_INIT_IDX_0(addr_len, type, instid, kernid, warpv),       \
+      RECORD_SET_INIT_IDX_1(cta),                                       \
+      RECORD_SET_INIT_IDX_2(grid),                                      \
+      RECORD_SET_INIT_IDX_3(warpp, sm),                                 \
+      RECORD_SET_INIT_IDX_4(req_size, clock)                            \
       }
 
 
-#define RECORD_SET_INIT(addr_len, type, instid, warpv,          \
+#define RECORD_SET_INIT(addr_len, type, instid, kernid, warpv,  \
                         cta_x, cta_y, cta_z,                    \
                         grid,                                   \
                         warpp, sm,                              \
                         req_size, clock)                        \
-  RECORD_SET_INIT_OPT(addr_len, type, instid, warpv,            \
+  RECORD_SET_INIT_OPT(addr_len, type, instid, kernid, warpv,    \
                       (((uint64_t)(cta_x)) << 32) |             \
                       (((uint64_t)(cta_y) & 0xFFFF) << 16) |    \
                       ((uint64_t)(cta_z) & 0xFFFF),             \
@@ -149,9 +152,9 @@ extern "C" {
                       req_size, clock)
 
 
-  typedef struct {
-    uint64_t data[5];
-  } record_header_t;
+    typedef struct {
+      uint64_t data[5];
+    } record_header_t;
   
   typedef struct {
     uint64_t data[DIV_ROUND_UP(RECORD_SIZE, 8)];

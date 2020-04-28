@@ -2,9 +2,8 @@
 //#include <stdio.h>
 
 extern "C" {
-  
-  __device__ uint64_t ___cuprof_grid_allocs_count[0x10000][2]; // 0x10000 == 65536
 
+  
 /**************************************************** 
  *  void ___cuprof_trace();
  *
@@ -16,7 +15,7 @@ extern "C" {
                                                uint64_t addr,
                                                uint64_t grid, uint64_t ctaid_serial,
                                                uint32_t warpv, uint32_t lane,
-                                               uint32_t instid,
+                                               uint32_t instid, uint32_t kernid,
                                                uint32_t sm, uint32_t warpp,
                                                uint16_t req_size,
                                                uint8_t type, uint8_t to_be_traced) {
@@ -30,40 +29,29 @@ extern "C" {
     asm volatile ("activemask.b32 %0;" : "=r"(active));
     uint32_t lowest = __ffs(active)-1;
 
-    volatile uint32_t* valloc = alloc;
-    volatile uint32_t* vcommit = commit;
-    volatile uint32_t* vcount = count;
+    volatile uint32_t* alloc_v = alloc;
+    volatile uint32_t* commit_v = commit;
+    volatile uint32_t* count_v = count;
     
-    uint32_t rec_offset = UINT32_MAX;
+    uint32_t rec_offset;
     
     
     // allocate space in slot
     if (lane == lowest) {
       
       // try to allocate until available
-
-      /*
-      while (*valloc >= RECORDS_PER_SLOT ||
-             (rec_offset = atomicInc(alloc, UINT32_MAX)) >= RECORDS_PER_SLOT) {
-        if (rec_offset != UINT32_MAX) {
-          atomicDec(alloc, UINT32_MAX);
-          rec_offset = UINT32_MAX;
-        }
-      }
-      */
-        
       while (true) {
 
         // if allocation is full, then wait for flush
-        while (*valloc >= RECORDS_PER_SLOT) {
+        while (*alloc_v >= RECORDS_PER_SLOT) {
           
           // if flush req sent, and all flushed on host
-          if ((*valloc == RECORDS_PER_SLOT) && (*vcommit == UINT32_MAX) &&
-              (*vcount == 0)) {
+          if ((*alloc_v == RECORDS_PER_SLOT) && (*commit_v == UINT32_MAX) &&
+              (*count_v == 0)) {
             
             if (atomicInc(commit, UINT32_MAX) == UINT32_MAX) {
-              __threadfence(); // guarantee resetting vcommit after valloc
-              *valloc = 0;
+              __threadfence(); // guarantee resetting commit_v after alloc_v
+              *alloc_v = 0;
             }
             else {
               atomicDec(commit, UINT32_MAX);
@@ -85,7 +73,7 @@ extern "C" {
       record_header_t* rec_header =
         (record_header_t*) &(records[rec_offset * RECORD_SIZE]);
       *rec_header =
-        (record_header_t) RECORD_SET_INIT_OPT(0, type, instid, warpv,
+        (record_header_t) RECORD_SET_INIT_OPT(0, type, instid, kernid, warpv,
                                               ctaid_serial,
                                               grid,
                                               warpp, sm,
@@ -102,26 +90,14 @@ extern "C" {
 
     // guarantee all writes before to be written to the 'records'
     __threadfence_system();
-    /*
-    if (lane == lowest) {
-      if (atomicInc(commit, UINT32_MAX) == RECORDS_PER_SLOT - 1) {
-        *vcount = *vcommit;
-        __threadfence_system();
-        while(*vcount);
-        *vcommit = 0;
-        __threadfence();
-        *valloc = 0;
-      }
-    }
-    */
     
     // commit space in slot, and send full signal to the host
     if (lane == lowest) {
       if (atomicInc(commit, UINT32_MAX) == RECORDS_PER_SLOT - 1) {
-        *vcount = RECORDS_PER_SLOT; // request flush to host
-        //printf("DEV_vcommit: %u\n", *vcommit);
+        *count_v = RECORDS_PER_SLOT; // request flush to host
+        //printf("DEV_commit_v: %u\n", *commit_v);
         __threadfence_system();
-        *vcommit = UINT32_MAX; // request sent successfully
+        *commit_v = UINT32_MAX; // request sent successfully
       }
     }
     
@@ -132,7 +108,7 @@ extern "C" {
 /**************************************************** 
  *  void ___cuprof_trace_ret();
  *
- *  Flush vcommit to count (host)
+ *  Flush commit_v to count (host)
  */
   __device__ void ___cuprof_trace_ret(uint32_t* commit, uint32_t* count,
                                       uint32_t lane) {
@@ -141,12 +117,11 @@ extern "C" {
     asm volatile ("activemask.b32 %0;" : "=r"(active));
     uint32_t lowest = __ffs(active)-1;
 
-    volatile uint32_t* vcommit = commit;
-    volatile uint32_t* vcount = count;
+    volatile uint32_t* commit_v = commit;
 
     if (lane == lowest) {
       __threadfence();
-      uint32_t rec_count = *vcommit;
+      uint32_t rec_count = *commit_v;
 
       // if request not sent at the point of return, then send request
       if (rec_count != UINT32_MAX) {

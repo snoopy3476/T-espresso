@@ -27,9 +27,10 @@ static llvm::StructType* getTraceInfoType(llvm::LLVMContext &ctx) {
 
 
 enum CuprofSymbolType {
-  SYMBOL_DATA_VAR,
-  SYMBOL_DATA_FUNC,
-  SYMBOL_END,
+  CUPROF_SYMBOL_DATA_VAR,
+  CUPROF_SYMBOL_DATA_FUNC,
+  CUPROF_SYMBOL_KERNEL_ID,
+  CUPROF_SYMBOL_END,
 };
 
 
@@ -40,7 +41,8 @@ enum CuprofSymbolType {
 #define CUPROF_ACCDAT_DTOR "___cuprof_accdat_dtor"
 const char * const SYMBOL_TYPE_STR[] = {
   "___cuprof_accdat_var_",
-  "___cuprof_accdat_func_"
+  "___cuprof_accdat_func_",
+  "___cuprof_kernel_id_"
 };
 
 
@@ -48,7 +50,7 @@ const char * const SYMBOL_TYPE_STR[] = {
 static std::string getSymbolNameForKernel(const llvm::Twine &kernel_name,
                                           CuprofSymbolType type) {
   
-  if (type >= SYMBOL_END || type < (CuprofSymbolType)0)
+  if (type >= CUPROF_SYMBOL_END || type < (CuprofSymbolType)0)
     type = (CuprofSymbolType)0;
 
   return (SYMBOL_TYPE_STR[type] + kernel_name).str();
