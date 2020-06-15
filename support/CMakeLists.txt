@@ -36,7 +36,7 @@ add_custom_command(OUTPUT "${LLVM_BINARY_DIR}/include/cuprofdevice.h"
   COMMAND bin/clang++
     --cuda-device-only
     -c -emit-llvm
-    --cuda-gpu-arch=sm_50
+    --cuda-gpu-arch=sm_53
     ${CUPROF_CUDA_FLAGS}
     -o lib/cuprofdevice.bc
     "${CMAKE_CURRENT_SOURCE_DIR}/device-support.cu"

@@ -198,6 +198,9 @@ extern "C" {
   
   static inline int tracefile_write(tracefile_t tracefile,
                                     const void* src, size_t size) {
+
+    //write(tracefile->file, src, size);///////////
+    //return 1;/////////////////
     int return_val = 1;
     
     // if overflow is expected after write, then flush to file first
@@ -205,7 +208,7 @@ extern "C" {
       return_val = (write(tracefile->file,
                           tracefile->buf,
                           tracefile->buf_commits)
-                    == (ssize_t)tracefile->buf_commits);
+                          == (ssize_t)tracefile->buf_commits);
       tracefile->buf_commits = 0;
     }
 
@@ -363,7 +366,8 @@ extern "C" {
     };
     *buf = data;
 
-    for (uint8_t i = 0; i < record->addr_len; i++) {
+    uint8_t addr_len = record->addr_len ? record->addr_len : 32;
+    for (uint8_t i = 0; i < addr_len; i++) {
       RECORD_ADDR(buf, i) = record->addr_unit[i].addr;
       RECORD_ADDR_META(buf, i) =
         (record->addr_unit[i].offset << 8) |
