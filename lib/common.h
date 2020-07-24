@@ -37,8 +37,6 @@ extern "C" {
   
   typedef struct {
     traceinfo_t info_d;
-    uint8_t* allocs_h;
-    uint8_t* commits_h;
     uint8_t* flusheds_h;
     uint8_t* flusheds_old;
     uint8_t* signals_h;

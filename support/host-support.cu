@@ -167,7 +167,6 @@ public:
 
     
     // allocate and initialize traceinfo of the host
-    /*
     cudaChecked(cudaMalloc(&traceinfo.info_d.allocs_d,
                            SLOTS_PER_STREAM_IN_A_DEV * CACHELINE));
     cudaChecked(cudaMemsetAsync(traceinfo.info_d.allocs_d, 0,
@@ -179,25 +178,6 @@ public:
     cudaChecked(cudaMemsetAsync(traceinfo.info_d.commits_d, 0,
                                 SLOTS_PER_STREAM_IN_A_DEV * CACHELINE,
                                 cudastream_trace));
-    */
-    
-    cudaChecked(cudaHostAlloc(&traceinfo.allocs_h,
-                              SLOTS_PER_STREAM_IN_A_DEV * CACHELINE,
-                              cudaHostAllocMapped));
-    cudaChecked(cudaHostGetDevicePointer(&traceinfo.info_d.allocs_d,
-                                         traceinfo.allocs_h,
-                                         0));
-    memset(traceinfo.allocs_h, 0, SLOTS_PER_STREAM_IN_A_DEV * CACHELINE);
-    
-    cudaChecked(cudaHostAlloc(&traceinfo.commits_h,
-                              SLOTS_PER_STREAM_IN_A_DEV * CACHELINE,
-                              cudaHostAllocMapped));
-    cudaChecked(cudaHostGetDevicePointer(&traceinfo.info_d.commits_d,
-                                         traceinfo.commits_h,
-                                         0));
-    memset(traceinfo.commits_h, 0, SLOTS_PER_STREAM_IN_A_DEV * CACHELINE);
-
-    
     /*
     cudaChecked(cudaMallocManaged(&traceinfo.flusheds_h,
                                   SLOTS_PER_STREAM_IN_A_DEV * CACHELINE));
@@ -322,10 +302,8 @@ public:
 
     cudaChecked(cudaStreamDestroy(cudastream_trace));
 
-    //cudaFree(traceinfo.info_d.allocs_d);
-    //cudaFree(traceinfo.info_d.commits_d);
-    cudaFreeHost(traceinfo.allocs_h);
-    cudaFreeHost(traceinfo.commits_h);
+    cudaFree(traceinfo.info_d.allocs_d);
+    cudaFree(traceinfo.info_d.commits_d);
     //cudaFree(traceinfo.flusheds_h);
     //cudaFreeHost(traceinfo.flusheds_h);
     cudaFree(traceinfo.info_d.flusheds_d);
@@ -418,8 +396,6 @@ protected:
                          tracefile_t out, bool is_kernel_active,
                          cudaStream_t cudastream_trace) {
     
-    volatile uint32_t* alloc_v = (uint32_t*)alloc_d;
-    volatile uint32_t* commit_v = (uint32_t*)commit_d;
     volatile uint32_t* signal_v = (uint32_t*)signal_h;
     volatile uint32_t* flushed_v = (uint32_t*)flushed_h;
     volatile uint32_t* flushed_old_v = (uint32_t*)flushed_old;
@@ -427,18 +403,13 @@ protected:
 
     
     uint32_t signal = *signal_v;
-    //uint32_t signal_old = *flushed_old_v;
-
-    uint32_t rec_count = *commit_v;
+    uint32_t signal_old = *flushed_old_v;
 
 
-    //printf("signal: %u\n", signal);///////////
-    if (is_kernel_active && rec_count != RECORDS_PER_SLOT)
+    
+    if (is_kernel_active && signal == 0)
       return 1;
-    //uint32_t rec_count = signal;
-    //printf("good!\n");//////////
-    *signal_v = 0;
-    *commit_v = 0;
+    uint32_t rec_count = signal;
     
 /*
     if (signal == signal_old || (signal - signal_old > RECORDS_PER_SLOT)) {
@@ -550,16 +521,23 @@ protected:
     
     
     // ensure commits, counts, records are reset first
-    //uint32_t zero = 0;
+    uint32_t zero = 0;
+    cudaChecked(cudaMemcpyAsync(commit_d,
+                                &zero,
+                                sizeof(uint32_t), cudaMemcpyHostToDevice,
+                                cudastream_trace));
+    *signal_v = 0;
     std::atomic_thread_fence(std::memory_order_release);
     cudaChecked(cudaStreamSynchronize(cudastream_trace));
     //*vcount = 0; // counts (H)
-    //cudaChecked(cudaMemcpyAsync(flushed_d,
-    //                            &signal,
-    //                            sizeof(uint32_t), cudaMemcpyHostToDevice,
-    //                            cudastream_trace));
-    *alloc_v = 0;
-    //printf("GREAT!\n");///////////////////////////
+    cudaChecked(cudaMemcpyAsync(flushed_d,
+                                &signal,
+                                sizeof(uint32_t), cudaMemcpyHostToDevice,
+                                cudastream_trace));
+    cudaChecked(cudaMemcpyAsync(alloc_d,
+                                &zero,
+                                sizeof(uint32_t), cudaMemcpyHostToDevice,
+                                cudastream_trace));
     //*flushed_v = signal;
     
     //printf("FLUSH_END (%u)\n", signal);//////////////////////
@@ -573,8 +551,8 @@ protected:
     cudaSetDevice(obj->device);
     obj->does_run = true;
 
-    uint8_t* allocs_d = obj->traceinfo.allocs_h;
-    uint8_t* commits_d = obj->traceinfo.commits_h;
+    uint8_t* allocs_d = obj->traceinfo.info_d.allocs_d;
+    uint8_t* commits_d = obj->traceinfo.info_d.commits_d;
     uint8_t* flusheds_h = obj->traceinfo.info_d.flusheds_d; //flusheds_h;
     uint8_t* flusheds_old = obj->traceinfo.flusheds_old;
     uint8_t* signals_h = obj->traceinfo.signals_h;
@@ -583,9 +561,13 @@ protected:
     cudaStream_t cudastream_trace = obj->cudastream_trace;
 
     tracefile_t tracefile = obj->tracefile;
-
-    memset(allocs_d, 0, SLOTS_PER_STREAM_IN_A_DEV * CACHELINE);
-    memset(commits_d, 0, SLOTS_PER_STREAM_IN_A_DEV * CACHELINE);
+    
+    cudaChecked(cudaMemsetAsync(allocs_d, 0,
+                                SLOTS_PER_STREAM_IN_A_DEV * CACHELINE,
+                                cudastream_trace));
+    cudaChecked(cudaMemsetAsync(commits_d, 0,
+                                SLOTS_PER_STREAM_IN_A_DEV * CACHELINE,
+                                cudastream_trace));
     
     
     

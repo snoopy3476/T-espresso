@@ -129,9 +129,9 @@ extern "C" {
         //if (counter == 0xFFFF)
         //printf("\r%20u\t%20u\t%20u\n", counter++, alloc_raw, *flushed_v);//////////////////////////
       }
+      //printf("good (%u / %u)\n", alloc_raw, *flushed_v); /////////////////////
       
       */
-      //printf("good (%u / %u)\n", rec_offset, *flushed_v); /////////////////////
 
       // write header at lowest lane
       
@@ -166,8 +166,8 @@ extern "C" {
     if (lane == lowest) {
       uint32_t commit_raw = atomicInc(commit, UINT32_MAX) + 1;
       //printf("end (%u / %u)\n", commit_raw, *flushed_v); ////////////////////////
-      if (commit_raw == RECORDS_PER_SLOT) {
-        //printf("signaled! (%u)\n", RECORDS_PER_SLOT);/////////////////////////////
+      if ((commit_raw & ((RECORDS_PER_SLOT-1))) == 0) {
+        //printf("signaled! (%u)\n", commit_raw);/////////////////////////////
         //*signal_v = commit_raw; // request flush to host
         *signal_v = RECORDS_PER_SLOT;
         //printf("DEV_commit_v: %u\n", *commit_v);
