@@ -406,12 +406,12 @@ protected:
     uint32_t signal_old = *flushed_old_v;
 
 
-    
-    if (is_kernel_active && signal == 0)
+    /*
+    if ( signal == 0 )
       return 1;
     uint32_t rec_count = signal;
-    
-/*
+    */
+
     if (signal == signal_old || (signal - signal_old > RECORDS_PER_SLOT)) {
       return 1;
     }
@@ -423,12 +423,13 @@ protected:
     // change old flushed value on host
     *flushed_old_v = signal;
 
+    /*
     uint32_t start_i = signal_old & (RECORDS_PER_SLOT-1);
     uint32_t end_i = signal & (RECORDS_PER_SLOT-1);
     uint32_t rec_count = (start_i < end_i) ?
       end_i - start_i :
       end_i - start_i + RECORDS_PER_SLOT;
-*/
+    */
     
     // get device records
     //cudaChecked(cudaMemcpyAsync(records_h + (start_i*RECORD_SIZE),
@@ -449,15 +450,17 @@ protected:
 
 
     /*
+    
     static char rec_orig[TRACE_RECORD_SIZE(32)];
     trace_record_t* const rec = (trace_record_t* const) rec_orig;
     //memcpy(buf_tmp, records_h, RECORDS_PER_SLOT * RECORD_SIZE);//////////////
 
+
     trace_record_addr_t* addr_unit_cur;
-    for (int i = 0; i < signal; i++) {
+    //for (int i = 0; i < signal; i++) {
       
-    //for (int32_t count = 0; count < rec_count; count++) {
-      //int i = (start_i + count) & (RECORDS_PER_SLOT-1);
+    for (int32_t count = 0; count < rec_count; count++) {
+      int i = (start_i + count) & (RECORDS_PER_SLOT-1);
       //printf("FLUSHING (%u, %d)\n", signal, i);//////////////////
       
       trace_deserialize((record_t*)&records_h[i * RECORD_SIZE], rec);
@@ -502,7 +505,6 @@ protected:
 
     // reset the read slot
     memset(records_h, 0, RECORDS_PER_SLOT * RECORD_SIZE);
-
     /*
     if (start_i == end_i) {
       memset(records_h, 0,
@@ -522,20 +524,19 @@ protected:
     
     // ensure commits, counts, records are reset first
     uint32_t zero = 0;
-    cudaChecked(cudaMemcpyAsync(commit_d,
-                                &zero,
-                                sizeof(uint32_t), cudaMemcpyHostToDevice,
-                                cudastream_trace));
-    *signal_v = 0;
+    //cudaChecked(cudaMemcpyAsync(commit_d,
+    //                            &zero,
+    //                            sizeof(uint32_t), cudaMemcpyHostToDevice,
+    //                            cudastream_trace));
     std::atomic_thread_fence(std::memory_order_release);
     cudaChecked(cudaStreamSynchronize(cudastream_trace));
     //*vcount = 0; // counts (H)
+    //cudaChecked(cudaMemcpyAsync(alloc_d,
+    //                            &zero,
+    //                            sizeof(uint32_t), cudaMemcpyHostToDevice,
+    //                            cudastream_trace));
     cudaChecked(cudaMemcpyAsync(flushed_d,
                                 &signal,
-                                sizeof(uint32_t), cudaMemcpyHostToDevice,
-                                cudastream_trace));
-    cudaChecked(cudaMemcpyAsync(alloc_d,
-                                &zero,
                                 sizeof(uint32_t), cudaMemcpyHostToDevice,
                                 cudastream_trace));
     //*flushed_v = signal;
@@ -617,6 +618,7 @@ protected:
           ret_before = ret;
           prev_time = stop - start;
           */
+          
         }
         //tot_loop += SLOTS_PER_STREAM_IN_A_DEV;
       }

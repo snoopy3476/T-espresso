@@ -103,21 +103,20 @@ extern "C" {
           }
           }
       */
-
-      //uint32_t counter = 0;
-      do {
+/*
+      while (true) {
         while (*alloc_v >= RECORDS_PER_SLOT) {
-          //counter++;
-          //if ((counter & 0xFFFFF) == 0xFFFFF)
-          //  printf("%u (%u)\n", *alloc_v, counter++);
         }
 
-        //printf("%u, %u, %u\n", *alloc_v, *commit_v, *signal_v);//////////////
-      } while ((rec_offset = atomicInc(alloc, UINT32_MAX)) >= RECORDS_PER_SLOT);
-      //if (counter >= 255)
-      //  printf("GET OUT!\n");//////////////
-
-      /*
+        if (atomicInc(alloc, UINT32_MAX) >= RECORDS_PER_SLOT) {
+          //atomicDec(alloc, UINT32_MAX);
+        }
+        else {
+          break;
+        }
+      }
+*/
+      
       // get the allocated offset
       uint32_t alloc_raw = atomicInc(alloc, UINT32_MAX);
       rec_offset = alloc_raw & (RECORDS_PER_SLOT-1);
@@ -131,7 +130,7 @@ extern "C" {
       }
       //printf("good (%u / %u)\n", alloc_raw, *flushed_v); /////////////////////
       
-      */
+
 
       // write header at lowest lane
       
@@ -168,8 +167,7 @@ extern "C" {
       //printf("end (%u / %u)\n", commit_raw, *flushed_v); ////////////////////////
       if ((commit_raw & ((RECORDS_PER_SLOT-1))) == 0) {
         //printf("signaled! (%u)\n", commit_raw);/////////////////////////////
-        //*signal_v = commit_raw; // request flush to host
-        *signal_v = RECORDS_PER_SLOT;
+        *signal_v = commit_raw; // request flush to host
         //printf("DEV_commit_v: %u\n", *commit_v);
         //__threadfence_system();
         //*flushed_v = UINT32_MAX; // request sent successfully
