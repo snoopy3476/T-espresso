@@ -59,7 +59,8 @@ namespace cuprof {
     struct TraceInfoValues {
       Value* alloc;
       Value* commit;
-      Value* count;
+      Value* flushed;
+      Value* signal;
       Value* records;
       Value* grid;
       Value* cta_serial;
@@ -126,9 +127,13 @@ namespace cuprof {
     
       trace_call =
         module.getOrInsertFunction("___cuprof_trace", void_ty,
-                                   i32p_ty, i32p_ty, i32p_ty, i8p_ty,
-                                   i64_ty, i64_ty, i64_ty,
-                                   i32_ty, i32_ty, i32_ty, i32_ty, i32_ty, i32_ty,
+                                   i32p_ty, i32p_ty,
+                                   i32p_ty, i32p_ty,
+                                   i8p_ty, i64_ty,
+                                   i64_ty, i64_ty,
+                                   i32_ty, i32_ty,
+                                   i32_ty, i32_ty,
+                                   i32_ty, i32_ty,
                                    i16_ty,
                                    i8_ty, i8_ty);
       if (!trace_call.getCallee()) {
@@ -654,7 +659,12 @@ namespace cuprof {
 
       
       Value* slot = irb.CreateAnd(cta_i, irb.getInt32(SLOTS_PER_STREAM_IN_A_DEV - 1));
-    
+
+      //Value* base_i = irb.CreateMul(slot, ConstantInt::get(i32_ty, CACHELINE));
+      //Value* slot_i = irb.CreateMul(irb.CreateZExt(slot, i64_ty),
+      //                              ConstantInt::get(i64_ty, RECORDS_PER_SLOT));
+      //slot_i = irb.CreateMul(slot_i, ConstantInt::get(i64_ty, RECORD_SIZE));
+      
       Value* base_i = irb.CreateMul(slot, ConstantInt::get(i32_ty, CACHELINE));
       Value* slot_i = irb.CreateMul(slot, ConstantInt::get(i32_ty, RECORDS_PER_SLOT));
       slot_i = irb.CreateMul(slot_i, ConstantInt::get(i32_ty, RECORD_SIZE));
@@ -668,13 +678,18 @@ namespace cuprof {
       Value* commit = irb.CreateLoad(commits_ptr, "commit");
       commit = irb.CreateInBoundsGEP(i8_ty, commit, base_i);
       commit = irb.CreateBitCast(commit, i32p_ty);
-      
-      Value* counts_ptr = irb.CreateStructGEP(nullptr, trace_info, 2);
-      Value* count = irb.CreateLoad(counts_ptr, "count");
-      count = irb.CreateInBoundsGEP(i8_ty, count, base_i);
-      count = irb.CreateBitCast(count, i32p_ty);
 
-      Value* records_ptr = irb.CreateStructGEP(nullptr, trace_info, 3);
+      Value* flusheds_ptr = irb.CreateStructGEP(nullptr, trace_info, 2);
+      Value* flushed = irb.CreateLoad(flusheds_ptr, "flushed");
+      flushed = irb.CreateInBoundsGEP(i8_ty, flushed, base_i);
+      flushed = irb.CreateBitCast(flushed, i32p_ty);
+      
+      Value* signals_ptr = irb.CreateStructGEP(nullptr, trace_info, 3);
+      Value* signal = irb.CreateLoad(signals_ptr, "signal");
+      signal = irb.CreateInBoundsGEP(i8_ty, signal, base_i);
+      signal = irb.CreateBitCast(signal, i32p_ty);
+
+      Value* records_ptr = irb.CreateStructGEP(nullptr, trace_info, 4);
       Value* records = irb.CreateLoad(records_ptr, "records");
       records = irb.CreateInBoundsGEP(i8_ty, records, slot_i);
 
@@ -728,7 +743,8 @@ namespace cuprof {
     
       info->alloc = alloc;
       info->commit = commit;
-      info->count = count;
+      info->flushed = flushed;
+      info->signal = signal;
       info->records = records;
       info->grid = grid;
       info->cta_serial = cta_serial;
@@ -816,8 +832,8 @@ namespace cuprof {
       
         Value* trace_call_args[] = {
           info->alloc, info->commit,
-          info->count, info->records,
-          addr,
+          info->flushed, info->signal,
+          info->records, addr,
           info->grid, info->cta_serial,
           info->warpv, info->lane,
           instid, info->kernel,
@@ -855,8 +871,8 @@ namespace cuprof {
     
       Value* trace_call_args[] = {
           info->alloc, info->commit,
-          info->count, info->records,
-          addr,
+          info->flushed, info->signal,
+          info->records, addr,
           info->grid, info->cta_serial,
           info->warpv, info->lane,
           instid, info->kernel,
@@ -890,8 +906,8 @@ namespace cuprof {
 
         Value* trace_call_args[] = {
           info->alloc, info->commit,
-          info->count, info->records,
-          addr,
+          info->flushed, info->signal,
+          info->records, addr,
           info->grid, info->cta_serial,
           info->warpv, info->lane,
           instid, info->kernel,
@@ -903,7 +919,7 @@ namespace cuprof {
 
         
         Value* trace_ret_call_args[] = {
-          info->commit, info->count,
+          info->commit, info->signal,
           info->lane
         };
         irb.CreateCall(trace_ret_call, trace_ret_call_args);

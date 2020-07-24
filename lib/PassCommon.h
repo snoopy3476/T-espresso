@@ -18,6 +18,7 @@ static llvm::StructType* getTraceInfoType(llvm::LLVMContext &ctx) {
     Type::getInt8PtrTy(ctx),
     Type::getInt8PtrTy(ctx),
     Type::getInt8PtrTy(ctx),
+    Type::getInt8PtrTy(ctx),
     Type::getInt8PtrTy(ctx)
   };
 

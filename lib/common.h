@@ -11,14 +11,14 @@ extern "C" {
 
 // Size of a record in bytes, contents of a record:
 // 32 bit meta info, 32bit size, 64 bit address, 64 bit cta id
-#define RECORD_SIZE 296 //56
+#define RECORD_SIZE 768 //296 //56
 // 6M buffer, devided into 4 parallel slots.
 // Buffers: SLOTS_PER_STREAM_IN_A_DEV * RECORDS_PER_SLOT * RECORD_SIZE
 // Absolute minimum is the warp size, all threads in a warp must collectively
 // wait or be able to write a record
-#define RECORDS_PER_SLOT (1024)
+#define RECORDS_PER_SLOT ((size_t)1024)
 // Number of slots must be power of two!
-#define SLOTS_PER_STREAM_IN_A_DEV 64
+#define SLOTS_PER_STREAM_IN_A_DEV (64)
 
 #define CACHELINE 128
 
@@ -30,13 +30,18 @@ extern "C" {
   typedef struct {
     uint8_t* allocs_d;
     uint8_t* commits_d;
-    uint8_t* counts_d;
+    uint8_t* flusheds_d;
+    uint8_t* signals_d;
     uint8_t* records_d;
   } traceinfo_t;
   
   typedef struct {
     traceinfo_t info_d;
-    uint8_t* counts_h;
+    uint8_t* allocs_h;
+    uint8_t* commits_h;
+    uint8_t* flusheds_h;
+    uint8_t* flusheds_old;
+    uint8_t* signals_h;
     uint8_t* records_h;
   } traceinfo_host_t;
   
