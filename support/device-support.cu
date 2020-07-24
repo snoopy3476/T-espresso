@@ -27,7 +27,6 @@ extern "C" {
     uint32_t active;
     asm volatile ("activemask.b32 %0;" : "=r"(active));
     uint32_t lowest = __ffs(active)-1;
-    uint32_t rlane_id = __popc(active << (32 - lane));
 
     volatile uint32_t* alloc_v = alloc;
     volatile uint32_t* commit_v = commit;
@@ -40,6 +39,70 @@ extern "C" {
     // allocate space in slot
     if (lane == lowest) {
 
+      /*
+      // try to allocate until available
+      while (true) {
+
+        // if allocation is full, then wait for flush
+        while (*alloc_v >= RECORDS_PER_SLOT) {
+
+          
+          // if flush req sent, and all flushed on host
+          if ((*alloc_v == RECORDS_PER_SLOT) && (*commit_v == UINT32_MAX) &&
+              (*signal_v == 0)) {
+            
+            if (atomicInc(commit, UINT32_MAX) == UINT32_MAX) {
+              __threadfence(); // guarantee resetting commit_v after alloc_v
+              *alloc_v = 0;
+            }
+            else {
+              atomicDec(commit, UINT32_MAX);
+            }
+            
+          }
+          
+        }
+
+        // if overallocated, then cancel the allocation and wait for flush
+        if ((rec_offset = atomicInc(alloc, UINT32_MAX)) >= RECORDS_PER_SLOT) {
+          atomicDec(alloc, UINT32_MAX);
+        }
+        else {
+          break;
+        }
+      }
+      */
+      // try to allocate until available
+      /*
+      while (true) {
+
+        // if allocation is full, then wait for flush
+        while (*alloc_v >= RECORDS_PER_SLOT) {
+          
+          // if flush req sent, and all flushed on host
+          if ((*alloc_v == RECORDS_PER_SLOT) && (*commit_v == UINT32_MAX) &&
+              (*flushed_v == 0)) {
+            
+            if (atomicInc(commit, UINT32_MAX) == UINT32_MAX) {
+              __threadfence(); // guarantee resetting commit_v after alloc_v
+              *alloc_v = 0;
+            }
+            else {
+              atomicDec(commit, UINT32_MAX);
+            }
+            
+          }
+        }
+
+        // if overallocated, then cancel the allocation and wait for flush
+        if ((rec_offset = atomicInc(alloc, UINT32_MAX)) >= RECORDS_PER_SLOT) {
+          atomicDec(alloc, UINT32_MAX);
+        }
+        else {
+          break;
+          }
+          }
+      */
 
       //uint32_t counter = 0;
       do {
@@ -51,9 +114,27 @@ extern "C" {
 
         //printf("%u, %u, %u\n", *alloc_v, *commit_v, *signal_v);//////////////
       } while ((rec_offset = atomicInc(alloc, UINT32_MAX)) >= RECORDS_PER_SLOT);
+      //if (counter >= 255)
+      //  printf("GET OUT!\n");//////////////
+
+      /*
+      // get the allocated offset
+      uint32_t alloc_raw = atomicInc(alloc, UINT32_MAX);
+      rec_offset = alloc_raw & (RECORDS_PER_SLOT-1);
+
+      // wait until slot is not full
+      //printf("start (%u / %u)\n", alloc_raw, *flushed_v); /////////////////////
+      //uint32_t counter = 0;
+      while ((alloc_raw - *flushed_v) >= RECORDS_PER_SLOT) {
+        //if (counter == 0xFFFF)
+        //printf("\r%20u\t%20u\t%20u\n", counter++, alloc_raw, *flushed_v);//////////////////////////
+      }
+      
+      */
+      //printf("good (%u / %u)\n", rec_offset, *flushed_v); /////////////////////
 
       // write header at lowest lane
-      /*
+      
       record_header_t* rec_header =
         (record_header_t*) &(records[rec_offset * RECORD_SIZE]);
       *rec_header =
@@ -62,7 +143,7 @@ extern "C" {
                                               grid,
                                               warpp, sm,
                                               req_size, clock);
-      */
+      
       //printf("WRITTEN (%u)\n", alloc_raw);//////////////////////////////
     }
 
@@ -71,12 +152,10 @@ extern "C" {
     
     rec_offset = __shfl_sync(active, rec_offset, lowest);
     //if (lane == lowest) {
-    
-    uint64_t* rec_base = (uint64_t*) &(records[(rec_offset) * RECORD_SIZE +
-                                               (rlane_id*24)]);
-    rec_base[0] = ctaid_serial;
-    rec_base[1] = grid;
-    rec_base[2] = addr;
+    uint64_t* rec_addr = (uint64_t*) &(records[(rec_offset) * RECORD_SIZE +
+                                               WARP_RECORD_RAW_SIZE(lane)]);
+    *rec_addr = addr;
+    //}
     
     
 

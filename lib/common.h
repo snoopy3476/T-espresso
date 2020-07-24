@@ -11,7 +11,7 @@ extern "C" {
 
 // Size of a record in bytes, contents of a record:
 // 32 bit meta info, 32bit size, 64 bit address, 64 bit cta id
-#define RECORD_SIZE 768 //296 //56
+#define RECORD_SIZE 296 //56
 // 6M buffer, devided into 4 parallel slots.
 // Buffers: SLOTS_PER_STREAM_IN_A_DEV * RECORDS_PER_SLOT * RECORD_SIZE
 // Absolute minimum is the warp size, all threads in a warp must collectively

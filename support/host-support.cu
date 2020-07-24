@@ -426,7 +426,7 @@ protected:
     uint32_t* flushed_d = (uint32_t*)flushed_h;
 
     
-    //uint32_t signal = *signal_v;
+    uint32_t signal = *signal_v;
     //uint32_t signal_old = *flushed_old_v;
 
     uint32_t rec_count = *commit_v;
@@ -437,7 +437,7 @@ protected:
       return 1;
     //uint32_t rec_count = signal;
     //printf("good!\n");//////////
-    //*signal_v = 0;
+    *signal_v = 0;
     *commit_v = 0;
     
 /*
@@ -552,7 +552,7 @@ protected:
     // ensure commits, counts, records are reset first
     //uint32_t zero = 0;
     std::atomic_thread_fence(std::memory_order_release);
-    //cudaChecked(cudaStreamSynchronize(cudastream_trace));
+    cudaChecked(cudaStreamSynchronize(cudastream_trace));
     //*vcount = 0; // counts (H)
     //cudaChecked(cudaMemcpyAsync(flushed_d,
     //                            &signal,
