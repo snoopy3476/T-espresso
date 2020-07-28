@@ -1,5 +1,7 @@
 #find_package(CUDAh)
 
+
+
 ###############################################################################
 ## HOST SUPPORT
 
@@ -31,6 +33,13 @@ install(FILES ${LLVM_BINARY_DIR}/lib/libcuprofhost.a
 ###############################################################################
 ## DEVICE SUPPORT
 
+
+# check binary
+find_program(CUPROF_XXD_EXECUTABLE xxd)
+if(NOT CUPROF_XXD_EXECUTABLE)
+    message(FATAL_ERROR "Could NOT find the executable 'xxd'!")
+endif()
+
 # compile to bitcode and headerize
 add_custom_command(OUTPUT "${LLVM_BINARY_DIR}/include/cuprofdevice.h"
   COMMAND bin/clang++
@@ -41,11 +50,10 @@ add_custom_command(OUTPUT "${LLVM_BINARY_DIR}/include/cuprofdevice.h"
     -o lib/cuprofdevice.bc
     "${CMAKE_CURRENT_SOURCE_DIR}/device-support.cu"
     &&
-    ${CMAKE_CURRENT_SOURCE_DIR}/headerize.sh
-    "lib/cuprofdevice.bc" "include/cuprofdevice.h"
+    xxd -i "lib/cuprofdevice.bc" > "include/cuprofdevice.h"
     &&
-    rm -f lib/cuprofdevice.bc
-    
+    rm -f "lib/cuprofdevice.bc"
+
   WORKING_DIRECTORY "${LLVM_BINARY_DIR}"
   DEPENDS device-support.cu ../lib/common.h clang
   VERBATIM

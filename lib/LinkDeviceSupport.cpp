@@ -26,7 +26,7 @@ namespace cuprof {
       SMDiagnostic err;
       LLVMContext& ctx = module.getContext();
 
-      StringRef source = StringRef((const char*)device_utils, sizeof(device_utils));
+      StringRef source = StringRef((const char*)lib_cuprofdevice_bc, sizeof(lib_cuprofdevice_bc));
       auto buf = MemoryBuffer::getMemBuffer(source, "source", false);
 
       auto util_module = parseIR(buf->getMemBufferRef(), err, ctx);

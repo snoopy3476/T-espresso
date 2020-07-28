@@ -16,13 +16,13 @@ extern "C" {
 // Buffers: SLOTS_PER_STREAM_IN_A_DEV * RECORDS_PER_SLOT * RECORD_SIZE
 // Absolute minimum is the warp size, all threads in a warp must collectively
 // wait or be able to write a record
-#define RECORDS_PER_SLOT ((size_t)1024)
+#define RECORDS_PER_SLOT ((size_t)4096)
 // Number of slots must be power of two!
 #define SLOTS_PER_STREAM_IN_A_DEV (64)
 
 #define CACHELINE 128
 
-
+#define CUPROF_RECBUF_MAPPED
 
 
 

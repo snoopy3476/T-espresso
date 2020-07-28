@@ -16,6 +16,9 @@
 #include <libgen.h>
 
 //*******************
+int32_t count_stats[100000] = {0};
+uint8_t* buffer = NULL;
+
 #include <sys/time.h>
 static inline double rtclock()
 {
@@ -25,6 +28,16 @@ static inline double rtclock()
   stat = gettimeofday (&Tp, &Tzp);
   if (stat != 0) printf("Error return from gettimeofday: %d",stat);
   return(Tp.tv_sec + Tp.tv_usec*1.0e-6);
+}
+
+static inline long long rtclocku()
+{
+  struct timezone Tzp;
+  struct timeval Tp;
+  int stat;
+  stat = gettimeofday (&Tp, &Tzp);
+  if (stat != 0) printf("Error return from gettimeofday: %d",stat);
+  return Tp.tv_usec + Tp.tv_sec*1.0e+6;
 }
 
 //***************
@@ -220,6 +233,8 @@ public:
     memset(traceinfo.signals_h, 0,
            SLOTS_PER_STREAM_IN_A_DEV * CACHELINE);
 
+
+#ifdef CUPROF_RECBUF_MAPPED
     
     cudaChecked(cudaHostAlloc(&traceinfo.records_h,
                               SLOTS_PER_STREAM_IN_A_DEV
@@ -230,8 +245,9 @@ public:
                                          0));
     memset(traceinfo.records_h, 0,
            SLOTS_PER_STREAM_IN_A_DEV * RECORDS_PER_SLOT * RECORD_SIZE);
+
+#else
     
-    /*
     traceinfo.records_h = (uint8_t*) malloc(SLOTS_PER_STREAM_IN_A_DEV
                                             * RECORDS_PER_SLOT * RECORD_SIZE);
     always_assert(traceinfo.records_h);
@@ -242,7 +258,8 @@ public:
                                 SLOTS_PER_STREAM_IN_A_DEV
                                 * RECORDS_PER_SLOT * RECORD_SIZE,
                                 cudastream_trace));
-    */
+
+#endif
     
     
 
@@ -309,9 +326,13 @@ public:
     cudaFree(traceinfo.info_d.flusheds_d);
     free(traceinfo.flusheds_old);
     cudaFreeHost(traceinfo.signals_h);
+
+#ifdef CUPROF_RECBUF_MAPPED
     cudaFreeHost(traceinfo.records_h);
-    //cudaFree(traceinfo.info_d.records_d);
-    //free(traceinfo.records_h);
+#else
+    cudaFree(traceinfo.info_d.records_d);
+    free(traceinfo.records_h);
+#endif
   }
 
   //******************************
@@ -413,8 +434,10 @@ protected:
     */
 
     if (signal == signal_old || (signal - signal_old > RECORDS_PER_SLOT)) {
-      return 1;
+      return 0;
     }
+
+    //long long start_t = rtclocku();
 
     //printf("wow [%u, %u]\n", signal, signal_old);//////////////
 
@@ -423,26 +446,39 @@ protected:
     // change old flushed value on host
     *flushed_old_v = signal;
 
-    /*
+
+    
     uint32_t start_i = signal_old & (RECORDS_PER_SLOT-1);
     uint32_t end_i = signal & (RECORDS_PER_SLOT-1);
     uint32_t rec_count = (start_i < end_i) ?
       end_i - start_i :
       end_i - start_i + RECORDS_PER_SLOT;
-    */
+
+#ifndef CUPROF_RECBUF_MAPPED
     
     // get device records
-    //cudaChecked(cudaMemcpyAsync(records_h + (start_i*RECORD_SIZE),
-    //                            records_d + (start_i*RECORD_SIZE),
-    //                            (rec_count*RECORD_SIZE), cudaMemcpyDeviceToHost,
-    //                            cudastream_trace));
-    //cudaChecked(cudaStreamSynchronize(cudastream_trace));
-    //cudaChecked(cudaMemsetAsync(records_d + (start_i*RECORD_SIZE),
-    //                            0, (rec_count*RECORD_SIZE), cudastream_trace));
+    cudaChecked(cudaMemcpyAsync(records_h + (start_i*RECORD_SIZE),
+                                records_d + (start_i*RECORD_SIZE),
+                                (rec_count*RECORD_SIZE), cudaMemcpyDeviceToHost,
+                                cudastream_trace));
+    cudaChecked(cudaStreamSynchronize(cudastream_trace));
+    cudaChecked(cudaMemsetAsync(records_d + (start_i*RECORD_SIZE),
+                                0, (rec_count*RECORD_SIZE), cudastream_trace));
+
+#endif
     
     //tracefile_write(out, records_h + (start_i*RECORD_SIZE), rec_count * RECORD_SIZE);
-    tracefile_write(out, records_h, RECORDS_PER_SLOT * RECORD_SIZE);
+
+
+    tracefile_write(out, records_h, rec_count * RECORD_SIZE);
+    //memcpy(buffer, records_h, RECORDS_PER_SLOT * RECORD_SIZE);//////////////////
     
+    //uint64_t count_max = *(uint64_t*)(records_h + RECORD_HEADER_SIZE);
+    //int64_t count_max = 0;
+    //for (int i = 0; i < 5; i++) {
+    //  uint64_t count_now = *(uint64_t*)(records_h + RECORD_SIZE * i + RECORD_HEADER_SIZE);
+    //  count_max |= count_now;
+    //}
     //memset(records_h + (start_i*RECORD_SIZE), 0, rec_count * RECORD_SIZE); // records (H)
     //write(out->file, records_h + (start_i*RECORD_SIZE), rec_count * RECORD_SIZE);
     //memcpy(buf_tmp + (start_i*RECORD_SIZE), records_h + (start_i*RECORD_SIZE), rec_count * RECORD_SIZE);/////////
@@ -503,8 +539,11 @@ protected:
     }
     */
 
+    
     // reset the read slot
     memset(records_h, 0, RECORDS_PER_SLOT * RECORD_SIZE);
+
+    
     /*
     if (start_i == end_i) {
       memset(records_h, 0,
@@ -543,7 +582,13 @@ protected:
     
     //printf("FLUSH_END (%u)\n", signal);//////////////////////
 
-    return 0;
+    //long long real_t = rtclocku() - start_t;
+
+
+    //count_stats[count_max]++;
+
+    
+    return 1;
   }
 
   // payload function of queue consumer
@@ -580,9 +625,16 @@ protected:
                                    }); // wait for refresh
     }
 
+    uint32_t offset[SLOTS_PER_STREAM_IN_A_DEV];
+    uint32_t records_offset[SLOTS_PER_STREAM_IN_A_DEV];
+
+    for(int slot = 0; slot < SLOTS_PER_STREAM_IN_A_DEV; slot++) {
+      offset[slot] = slot * CACHELINE;
+      records_offset[slot] = slot * RECORDS_PER_SLOT * RECORD_SIZE;
+    }
 
     int64_t tot_loop = 0;
-    double tot_time = 0;
+    long long tot_time = 0;
     double prev_time = 0;
     int64_t tot_seq = 0;
     int64_t max_seq = 0;
@@ -593,15 +645,22 @@ protected:
       
       while(obj->should_run) {
         for(int slot = 0; slot < SLOTS_PER_STREAM_IN_A_DEV; slot++) {
-          uint32_t offset = slot * CACHELINE;
-          uint32_t records_offset = slot * RECORDS_PER_SLOT * RECORD_SIZE;
           //double start = rtclock();
-          int ret = consumeSlot(&allocs_d[offset], &commits_d[offset],
-                                &signals_h[offset],
-                                &flusheds_h[offset], &flusheds_old[offset],
-                                &records_d[records_offset],
-                                &records_h[records_offset],
+          int ret = consumeSlot(&allocs_d[offset[slot]], &commits_d[offset[slot]],
+                                &signals_h[offset[slot]],
+                                &flusheds_h[offset[slot]],
+                                &flusheds_old[offset[slot]],
+                                &records_d[records_offset[slot]],
+                                &records_h[records_offset[slot]],
                                 tracefile, true, cudastream_trace);
+/*
+          if (ret) {
+            //printf("ret: %d\n", ret);///////////
+
+            tot_time += (long long)ret;
+            tot_seq += 1;
+          }
+*/
           //double stop = rtclock();
           /*
           if (ret_before == 0 && ret == 0) {
@@ -618,6 +677,8 @@ protected:
           ret_before = ret;
           prev_time = stop - start;
           */
+          //if (ret == 0)
+          //  tot_seq++;
           
         }
         //tot_loop += SLOTS_PER_STREAM_IN_A_DEV;
@@ -626,11 +687,10 @@ protected:
       // after should_run flag has been reset to false, no warps are writing, but
       // there might still be data in the buffers
       for(int slot = 0; slot < SLOTS_PER_STREAM_IN_A_DEV; slot++) {
-        uint32_t offset = slot * CACHELINE;
-        uint32_t records_offset = slot * RECORDS_PER_SLOT * RECORD_SIZE;
-        consumeSlot(&allocs_d[offset], &commits_d[offset], &signals_h[offset],
-                    &flusheds_h[offset], &flusheds_old[offset],
-                    &records_d[records_offset], &records_h[records_offset],
+        consumeSlot(&allocs_d[offset[slot]], &commits_d[offset[slot]],
+                    &signals_h[offset[slot]], &flusheds_h[offset[slot]],
+                    &flusheds_old[offset[slot]], &records_d[records_offset[slot]],
+                    &records_h[records_offset[slot]],
                     tracefile, false, cudastream_trace);
       }
       
@@ -641,10 +701,18 @@ protected:
                                    }); // wait for refresh
     }
 
+    //printf("tot_time = %lf (%ld)\n", (double)tot_time * 1.0e-6, tot_seq);/////////////
     //if (max_seq > 0)
     //  printf("[max_seq = %ld, tot_seq = %ld / %ld (%lfs)]\n", max_seq, tot_seq, tot_loop, tot_time);////////////
+/*
+    if (obj->device == 0)
+      for (int i = 0; i < 100000; i++) {
+        if (count_stats[i]) {
+          fprintf(stderr, "%d,%d\n", i, count_stats[i]);
+        }
+      }
     
-    
+*/
     obj->does_run = false;
     return;
   }
@@ -684,6 +752,7 @@ public:
   
   TraceManager() {
     initConsumers();
+    buffer = (uint8_t*) malloc(RECORD_SIZE * RECORDS_PER_SLOT);/////////////////
     //device_count = 0;
   }
 
@@ -717,6 +786,7 @@ public:
         delete consumers[device];
     }
     delete[] consumers;
+    free(buffer);/////////////////////
   }
   
   

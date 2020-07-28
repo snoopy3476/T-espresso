@@ -2,8 +2,8 @@
 
 extern "C" {
 
-  
-/**************************************************** 
+
+/****************************************************
  *  void ___cuprof_trace();
  *
  *  Write trace data and associated info
@@ -18,7 +18,7 @@ extern "C" {
                                                uint32_t sm, uint32_t warpp,
                                                uint16_t req_size,
                                                uint8_t type, uint8_t to_be_traced) {
-    
+
     if (!to_be_traced)
       return;
 
@@ -28,164 +28,102 @@ extern "C" {
     //asm volatile ("activemask.b32 %0;" : "=r"(active));
     uint32_t lowest = __ffs(active)-1;
 
+    uint32_t rlane_id = __popc(active << (32 - lane)); ////////////
+    uint32_t n_active = __popc(active); //////////////
+
     volatile uint32_t* alloc_v = alloc;
     volatile uint32_t* commit_v = commit;
     volatile uint32_t* flushed_v = flushed;
     volatile uint32_t* signal_v = signal;
-    
+
     uint32_t rec_offset;
-    
-    
+
+
     // allocate space in slot
     if (lane == lowest) {
 
-      /*
-      // try to allocate until available
-      while (true) {
-
-        // if allocation is full, then wait for flush
-        while (*alloc_v >= RECORDS_PER_SLOT) {
-
-          
-          // if flush req sent, and all flushed on host
-          if ((*alloc_v == RECORDS_PER_SLOT) && (*commit_v == UINT32_MAX) &&
-              (*signal_v == 0)) {
-            
-            if (atomicInc(commit, UINT32_MAX) == UINT32_MAX) {
-              __threadfence(); // guarantee resetting commit_v after alloc_v
-              *alloc_v = 0;
-            }
-            else {
-              atomicDec(commit, UINT32_MAX);
-            }
-            
-          }
-          
-        }
-
-        // if overallocated, then cancel the allocation and wait for flush
-        if ((rec_offset = atomicInc(alloc, UINT32_MAX)) >= RECORDS_PER_SLOT) {
-          atomicDec(alloc, UINT32_MAX);
-        }
-        else {
-          break;
-        }
-      }
-      */
-      // try to allocate until available
-      /*
-      while (true) {
-
-        // if allocation is full, then wait for flush
-        while (*alloc_v >= RECORDS_PER_SLOT) {
-          
-          // if flush req sent, and all flushed on host
-          if ((*alloc_v == RECORDS_PER_SLOT) && (*commit_v == UINT32_MAX) &&
-              (*flushed_v == 0)) {
-            
-            if (atomicInc(commit, UINT32_MAX) == UINT32_MAX) {
-              __threadfence(); // guarantee resetting commit_v after alloc_v
-              *alloc_v = 0;
-            }
-            else {
-              atomicDec(commit, UINT32_MAX);
-            }
-            
-          }
-        }
-
-        // if overallocated, then cancel the allocation and wait for flush
-        if ((rec_offset = atomicInc(alloc, UINT32_MAX)) >= RECORDS_PER_SLOT) {
-          atomicDec(alloc, UINT32_MAX);
-        }
-        else {
-          break;
-          }
-          }
-      */
-/*
-      while (true) {
-        while (*alloc_v >= RECORDS_PER_SLOT) {
-        }
-
-        if (atomicInc(alloc, UINT32_MAX) >= RECORDS_PER_SLOT) {
-          //atomicDec(alloc, UINT32_MAX);
-        }
-        else {
-          break;
-        }
-      }
-*/
-      
       // get the allocated offset
       uint32_t alloc_raw = atomicInc(alloc, UINT32_MAX);
       rec_offset = alloc_raw & (RECORDS_PER_SLOT-1);
 
       // wait until slot is not full
-      //printf("start (%u / %u)\n", alloc_raw, *flushed_v); /////////////////////
-      //uint32_t counter = 0;
-      while ((alloc_raw - *flushed_v) >= RECORDS_PER_SLOT) {
-        //if (counter == 0xFFFF)
-        //printf("\r%20u\t%20u\t%20u\n", counter++, alloc_raw, *flushed_v);//////////////////////////
-      }
-      //printf("good (%u / %u)\n", alloc_raw, *flushed_v); /////////////////////
-      
+      while ((alloc_raw - *flushed_v) >= RECORDS_PER_SLOT);
 
+
+
+      ////////// WRITE DISTRIBUTION (OFF) //////////
 
       // write header at lowest lane
-      
+      /*
       record_header_t* rec_header =
         (record_header_t*) &(records[rec_offset * RECORD_SIZE]);
+
       *rec_header =
         (record_header_t) RECORD_SET_INIT_OPT(0, type, instid, kernid, warpv,
                                               ctaid_serial,
                                               grid,
                                               warpp, sm,
                                               req_size, clock);
-      
-      //printf("WRITTEN (%u)\n", alloc_raw);//////////////////////////////
+      */
+      //////////////////////////////////////////////
     }
 
 
-    // write requested addr for each lane
-    
+    ////////// WRITE DISTRIBUTION (ON) //////////
+
+    // write header
+
+    uint64_t header_info[5];
+    header_info[0] = RECORD_SET_INIT_IDX_0(0, type, instid, kernid, warpv);
+    header_info[1] = RECORD_SET_INIT_IDX_1(ctaid_serial);
+    header_info[2] = RECORD_SET_INIT_IDX_2(grid);
+    header_info[3] = RECORD_SET_INIT_IDX_3(warpp, sm);
+    header_info[4] = RECORD_SET_INIT_IDX_4(req_size, clock);
+
     rec_offset = __shfl_sync(active, rec_offset, lowest);
-    //if (lane == lowest) {
-    uint64_t* rec_addr = (uint64_t*) &(records[(rec_offset) * RECORD_SIZE +
-                                               WARP_RECORD_RAW_SIZE(lane)]);
-    *rec_addr = addr;
-    //}
-    
-    
+
+    volatile record_header_t* rec_header =
+      (record_header_t*) &(records[rec_offset * RECORD_SIZE]);
+
+    for (int i = rlane_id; i < 5; i += n_active) {
+      *((uint64_t*)rec_header + i) = header_info[i];
+    }
+
+    //////////////////////////////////////////////
+
+
+
+    // write reqeusted addrs for each lane
+    volatile uint64_t* rec_addr = (uint64_t*) &(records[(rec_offset) * RECORD_SIZE +
+                                                        WARP_RECORD_RAW_SIZE(lane)]);
+    *rec_addr = (uint64_t) addr;
+
+
 
     // guarantee all writes before to be written to the 'records'
     __threadfence_system();
-    
+
     // commit space in slot, and send full signal to the host
     if (lane == lowest) {
       uint32_t commit_raw = atomicInc(commit, UINT32_MAX) + 1;
-      //printf("end (%u / %u)\n", commit_raw, *flushed_v); ////////////////////////
       if ((commit_raw & ((RECORDS_PER_SLOT-1))) == 0) {
-        //printf("signaled! (%u)\n", commit_raw);/////////////////////////////
         *signal_v = commit_raw; // request flush to host
-        //printf("DEV_commit_v: %u\n", *commit_v);
         //__threadfence_system();
-        //*flushed_v = UINT32_MAX; // request sent successfully
       }
     }
-    
+
   }
 
-  
 
-/**************************************************** 
+
+/****************************************************
  *  void ___cuprof_trace_ret();
  *
  *  Flush commit_v to signal (host)
  */
   __device__ void ___cuprof_trace_ret(uint32_t* commit, uint32_t* signal,
                                       uint32_t lane) {
-    
+
     uint32_t active;
     asm volatile ("activemask.b32 %0;" : "=r"(active));
     uint32_t lowest = __ffs(active)-1;
@@ -207,12 +145,12 @@ extern "C" {
 
   }
 
-  
 
-/**************************************************** 
+
+/****************************************************
  *  void ___cuprof_filter();
  *
- *  Check if current thread is to be traced, 
+ *  Check if current thread is to be traced,
  *  with given thread-constant vars (grid, cta, warpv).
  *
  *  Called only once in a thread, when the thread starts.
@@ -223,7 +161,7 @@ extern "C" {
                                    uint8_t filter_cta_count,
                                    uint8_t filter_warpv_count,
                                    uint64_t ctaid_serial, uint32_t warpv) {
-    
+
     uint64_t grid;
     asm volatile ("mov.u64 %0, %%gridid;" : "=l"(grid));
 
@@ -234,7 +172,7 @@ extern "C" {
       !filter_cta_count,
       !filter_warpv_count
     };
-    
+
 
     // check grid filter
     for (uint32_t i = 0; i < filter_grid_count; i++)
@@ -261,11 +199,11 @@ extern "C" {
   }
 
 
-  
-/**************************************************** 
+
+/****************************************************
  *  void ___cuprof_filter_volatile();
  *
- *  Check if current thread is to be traced, 
+ *  Check if current thread is to be traced,
  *  with given volatile vars (sm, warpp).
  *
  *  Called on every trace, iff the filter of sm, warpp is set.
@@ -282,7 +220,7 @@ extern "C" {
       !filter_sm_count,
       !filter_warpp_count
     };
-    
+
     // check sm filter
     for (uint32_t i = 0; i < filter_sm_count; i++)
       if (filter_sm[i] == sm)

@@ -513,6 +513,7 @@ namespace cuprof {
 
 
       // patch calls
+      /*
       for (KCall& kcall : getAnalysis<LocateKCallsPass>().getLaunchList()) {
       
         // kernel filtering
@@ -525,6 +526,7 @@ namespace cuprof {
                         kcall.kernel_launch,
                         kcall.kernel_obj->getName());
       }
+      */
 
     
       // register global variables of trace info for all kernels registered in this module
