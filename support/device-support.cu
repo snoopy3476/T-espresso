@@ -16,8 +16,7 @@ extern "C" {
                                                uint32_t warpv, uint32_t lane,
                                                uint32_t instid, uint32_t kernid,
                                                uint32_t sm, uint32_t warpp,
-                                               uint16_t req_size,
-                                               uint8_t type, uint8_t to_be_traced) {
+                                               uint8_t to_be_traced) {
 
     if (!to_be_traced)
       return;
@@ -56,7 +55,7 @@ extern "C" {
       // write header at lowest lane
       /*
       record_header_t* rec_header =
-        (record_header_t*) &(records[rec_offset * RECORD_SIZE]);
+        (record_header_t*) &(records[rec_offset * RECORD_MAX_SIZE]);
 
       *rec_header =
         (record_header_t) RECORD_SET_INIT_OPT(0, type, instid, kernid, warpv,
@@ -68,22 +67,27 @@ extern "C" {
       //////////////////////////////////////////////
     }
 
+    //uint64_t msb = addr & 0xFFFFFFFF00000000;
+    //int addr_len;
+    //__match_all_sync(active, msb, &addr_len);
+    
 
     ////////// WRITE DISTRIBUTION (ON) //////////
 
     // write header
 
-    uint64_t header_info[5];
-    header_info[0] = RECORD_SET_INIT_IDX_0(0, type, instid, kernid, warpv);
+    uint64_t header_info[6];
+    header_info[0] = RECORD_SET_INIT_IDX_0(0, instid, kernid, warpv);
     header_info[1] = RECORD_SET_INIT_IDX_1(ctaid_serial);
     header_info[2] = RECORD_SET_INIT_IDX_2(grid);
     header_info[3] = RECORD_SET_INIT_IDX_3(warpp, sm);
-    header_info[4] = RECORD_SET_INIT_IDX_4(req_size, clock);
+    header_info[4] = RECORD_SET_INIT_IDX_4(clock);
+    header_info[5] = RECORD_SET_INIT_IDX_5(addr, active);
 
     rec_offset = __shfl_sync(active, rec_offset, lowest);
 
     volatile record_header_t* rec_header =
-      (record_header_t*) &(records[rec_offset * RECORD_SIZE]);
+      (record_header_t*) &(records[rec_offset * RECORD_MAX_SIZE]);
 
     for (int i = rlane_id; i < 5; i += n_active) {
       *((uint64_t*)rec_header + i) = header_info[i];
@@ -92,10 +96,19 @@ extern "C" {
     //////////////////////////////////////////////
 
 
+    
+
+
+
+
+
+
+    /////////////////////////////////////////////
+
 
     // write reqeusted addrs for each lane
-    volatile uint64_t* rec_addr = (uint64_t*) &(records[(rec_offset) * RECORD_SIZE +
-                                                        WARP_RECORD_RAW_SIZE(lane)]);
+    volatile uint64_t* rec_addr = (uint64_t*) &(records[(rec_offset) * RECORD_MAX_SIZE +
+                                                        RECORD_SIZE(lane)]);
     *rec_addr = (uint64_t) addr;
 
 

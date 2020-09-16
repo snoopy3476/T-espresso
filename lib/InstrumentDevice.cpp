@@ -1,6 +1,12 @@
+#include <set>
+#include <iostream>
+#include <fstream>
+#include <memory>
+
 #include "llvm/Pass.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/IR/Function.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/InlineAsm.h"
@@ -10,10 +16,6 @@
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
-
-#include <set>
-#include <iostream>
-#include <fstream>
 
 #include "common.h"
 #include "trace-io.h"
@@ -134,8 +136,7 @@ namespace cuprof {
                                    i32_ty, i32_ty,
                                    i32_ty, i32_ty,
                                    i32_ty, i32_ty,
-                                   i16_ty,
-                                   i8_ty, i8_ty);
+                                   i8_ty);
       if (!trace_call.getCallee()) {
         report_fatal_error("No ___cuprof_trace declaration found");
       }
@@ -208,107 +209,66 @@ namespace cuprof {
       return gv;
     }
 
-  
-    GlobalVariable* setDebugData(Function* func, std::vector<byte> input) {
+    void setKernelHeader(Function* kernel,
+                            std::vector<trace_header_inst_t>& inst_debugdata) {
 
-      Module& module = *func->getParent();
+      
+      // allocate space for kernel header struct
+      size_t kernel_header_size =
+        sizeof(trace_header_kernel_t) +
+        sizeof(trace_header_inst_t) * inst_debugdata.size() +
+        4;
+      std::unique_ptr<byte[]> kernel_header_buf =
+        std::make_unique<byte[]>(kernel_header_size);
+      if (!kernel_header_buf) {
+        fprintf(stderr, "cuprof: Failed to build debug data!\n");
+        abort();
+      }
+      trace_header_kernel_t* kernel_header =
+        (trace_header_kernel_t*) kernel_header_buf.get();
+      //memset(kernel_header, 0, kernel_header_size);
+
+
+      // init kernel header struct
+      const StringRef kernel_name_ref = kernel->getName();
+      const std::string kernel_name = kernel_name_ref.str();
+      uint8_t kernel_name_len = std::min(kernel_name.length(), (size_t)TRACE_KERNELNAME_MAXLEN);
+      
+      kernel_header->insts_count = inst_debugdata.size();
+      kernel_header->kernel_name_len = kernel_name_len;
+      memcpy(kernel_header->kernel_name, kernel_name.c_str(), kernel_name_len);
+      memcpy(kernel_header->insts, inst_debugdata.data(),
+             sizeof(trace_header_inst_t) * kernel_header->insts_count);
+
+      
+      // get serialized header data
+      size_t kernel_data_size;
+      byte* kernel_data = header_serialize(&kernel_data_size, kernel_header);
+      
+
+      // set kernel header to global constant
+      Module& module = *kernel->getParent();
       LLVMContext& ctx = module.getContext();
 
-      const StringRef kernel_name_ref = func->getName();
-      const std::string kernel_name = kernel_name_ref.str();
       const std::string varname_str =
         getSymbolNameForKernel(kernel_name, CUPROF_SYMBOL_DATA_VAR);
-    
-    
+      
       GlobalVariable* debugdata = module.getNamedGlobal(varname_str.c_str());
       if (debugdata != nullptr) {
         debugdata->eraseFromParent();
         debugdata = nullptr;
       }
-    
-      unsigned int data_len = input.size();
-      ArrayRef<byte> data_arr_ref = ArrayRef<byte>(input.data(), data_len);
-      Constant* var_init = ConstantDataArray::get(ctx, data_arr_ref);
-      debugdata = new GlobalVariable(module, var_init->getType(), false,
-                                     GlobalValue::ExternalLinkage,
-                                     var_init, varname_str.c_str(), nullptr,
-                                     GlobalValue::ThreadLocalMode::NotThreadLocal,
-                                     1, false);
-      return debugdata;
-    }
-
-    
-    bool appendAndGetKernelDebugData(Function* kernel, std::vector<byte>& debugdata,
-                                     std::vector<Instruction*> inst_list) {
-      LLVMContext& ctx = kernel->getParent()->getContext();
-      bool debuginfo_not_found = false;
-    
-
-      uint64_t kernel_header_size =
-        sizeof(trace_header_kernel_t) +
-        sizeof(trace_header_inst_t) * inst_list.size() +
-        4;
-      trace_header_kernel_t* kernel_header =
-        (trace_header_kernel_t* ) malloc(kernel_header_size);
-      if (!kernel_header) {
-        fprintf(stderr, "cuprof: Failed to build debug data!\n");
-        abort();
-      }
-      memset(kernel_header, 0, kernel_header_size);
-
-
-      // append kernel info
-      std::string kernel_name = kernel->getName().str();
-      uint8_t kernel_name_len = std::min(kernel_name.length(), (size_t)0xFF);
-      memcpy(kernel_header->kernel_name, kernel_name.c_str(), kernel_name_len);
-      kernel_header->kernel_name_len = kernel_name_len;
-
-      // '-g' option needed for debug info!
-      uint32_t instid = 0;
-      for (Instruction* inst : inst_list) {
       
-        instid++; // id starts from 1
-
-        // set inst info
-        trace_header_inst_t* inst_header = &kernel_header->insts[instid - 1];
-        inst_header->instid = instid;
-
-        // set inst debug info
-        const DebugLoc& loc = inst->getDebugLoc();
-        if (loc) {
-          std::string inst_path = loc->getFilename().str();
-          while (inst_path.find("./") == 0) // remove leading "./" in path if exists
-            inst_path.erase(0, 2);
-          int inst_path_len = std::min(inst_path.length(), (size_t)0xFF);
-
-        
-          inst_header->row = loc->getLine();
-          inst_header->col = loc->getColumn();
-          inst_header->inst_filename_len = inst_path_len;
-          memcpy(inst_header->inst_filename, inst_path.c_str(), inst_path_len);
-
-        } else {
-          debuginfo_not_found = true;
-        }
-
-        MDNode* metadata = MDNode::get(ctx, MDString::get(ctx, std::to_string(instid)));
-        inst->setMetadata(TRACE_DEBUG_DATA, metadata);
-
-      }
-      kernel_header->insts_count = instid;
-
-    
-      byte* kernel_data =
-        (byte* ) malloc(get_max_header_bytes_after_serialize(kernel_header));
-      size_t kernel_data_size = header_serialize(kernel_data, kernel_header);
-      debugdata.reserve(debugdata.size() + kernel_data_size);
-      debugdata.insert(debugdata.end(), kernel_data,
-                       kernel_data + kernel_data_size);
-
+      ArrayRef<byte> data_arr_ref = ArrayRef<byte>(kernel_data, kernel_data_size);
+      Constant* var_init = ConstantDataArray::get(ctx, data_arr_ref);
+      new GlobalVariable(module, var_init->getType(), false,
+                         GlobalValue::ExternalLinkage,
+                         var_init, varname_str.c_str(), nullptr,
+                         GlobalValue::ThreadLocalMode::NotThreadLocal,
+                         1, false);
+      
+      
       free(kernel_data);
-    
-
-      return !debuginfo_not_found;
     }
 
 
@@ -663,11 +623,11 @@ namespace cuprof {
       //Value* base_i = irb.CreateMul(slot, ConstantInt::get(i32_ty, CACHELINE));
       //Value* slot_i = irb.CreateMul(irb.CreateZExt(slot, i64_ty),
       //                              ConstantInt::get(i64_ty, RECORDS_PER_SLOT));
-      //slot_i = irb.CreateMul(slot_i, ConstantInt::get(i64_ty, RECORD_SIZE));
+      //slot_i = irb.CreateMul(slot_i, ConstantInt::get(i64_ty, RECORD_MAX_SIZE));
       
       Value* base_i = irb.CreateMul(slot, ConstantInt::get(i32_ty, CACHELINE));
       Value* slot_i = irb.CreateMul(slot, ConstantInt::get(i32_ty, RECORDS_PER_SLOT));
-      slot_i = irb.CreateMul(slot_i, ConstantInt::get(i32_ty, RECORD_SIZE));
+      slot_i = irb.CreateMul(slot_i, ConstantInt::get(i32_ty, RECORD_MAX_SIZE));
 
       Value* allocs_ptr = irb.CreateStructGEP(nullptr, trace_info, 0);
       Value* alloc = irb.CreateLoad(allocs_ptr, "alloc");
@@ -762,23 +722,76 @@ namespace cuprof {
     }
 
 
+
+
+    bool appendInstHeader(std::vector<trace_header_inst_t>& inst_headers,
+                          Value* target, uint32_t instid, uint32_t inst_type,
+                          uint32_t meta) {
+
+      bool debuginfo_not_found = false;
+
+      // target basic info
+      trace_header_inst_t inst_header = {};
+      inst_header.instid = instid;
+      inst_header.inst_type = inst_type;
+      inst_header.meta = meta;
+
+      // target debug info
+      // '-g' option needed for debug info!
+      if (const DebugLoc& debug = isa<Instruction>(target) ?
+          ((Instruction*)target)->getDebugLoc() : nullptr) {
+        
+        StringRef path = debug->getFilename();
+        int path_len = std::min(path.size(), (size_t)TRACE_FILENAME_MAXLEN);
+
+        
+        inst_header.row = debug->getLine();
+        inst_header.col = debug->getColumn();
+        inst_header.inst_filename_len = path_len;
+        inst_header.inst_filename = path.data();
+        //memcpy(inst_header.inst_filename, path.c_str(), path_len);
+      }
+      else if (const DISubprogram* debug = isa<Function>(target) ?
+               ((Function*)target)->getSubprogram() : nullptr) {
+        
+        StringRef path = debug->getFilename();
+        int path_len = std::min(path.size(), (size_t)TRACE_FILENAME_MAXLEN);
+
+        
+        inst_header.row = debug->getLine();
+        inst_header.col = 0;
+        inst_header.inst_filename_len = path_len;
+        inst_header.inst_filename = path.data();
+      }
+      else {
+        debuginfo_not_found = true;
+      }
+
+      // append to vector
+      inst_headers.push_back(inst_header);
+
+      return debuginfo_not_found;
+    }
+
+
   
-    void instrumentMemAccess(Function* func, ArrayRef<Instruction*> memacc_insts,
-                             TraceInfoValues* info) {
-    
-      const DataLayout& dat_layout = func->getParent()->getDataLayout();
+    bool instrumentMemAccess(Function* kernel, ArrayRef<Instruction*> memacc_insts,
+                             TraceInfoValues* info,
+                             std::vector<trace_header_inst_t>& inst_headers) {
 
-      IRBuilder<> irb(func->front().getFirstNonPHI());
-
-    
-
+      bool debuginfo_not_found = false;
+      uint32_t instid = inst_headers.size()+1;
+      const DataLayout& dat_layout = kernel->getParent()->getDataLayout();
+      IRBuilder<> irb(kernel->front().getFirstNonPHI());
+      
       for (Instruction* inst : memacc_insts) {
+
+        
+        // determine the pointer type
+        
         Value* ptr_operand = nullptr;
-        irb.SetInsertPoint(inst->getNextNode()); // insert after the access
-
-
-        // get type & addr
         uint8_t type_num = 0;
+        
         if (LoadInst* loadinst = dyn_cast<LoadInst>(inst)) {
           ptr_operand = loadinst->getPointerOperand();
           type_num = (uint8_t)RECORD_LOAD;
@@ -803,63 +816,71 @@ namespace cuprof {
                  .startswith("llvm.nvvm.atomic"));
           ptr_operand = callinst->getArgOperand(0);
           type_num = RECORD_ATOMIC;
-                             
+          
         } else {
           report_fatal_error("invalid access type encountered, this should not have happened");
         }
 
+        
 
+        // insert func call
+        
+        // insert argument calculation
+        irb.SetInsertPoint(inst->getNextNode()); // insert after the access
         Value* addr = irb.CreatePtrToInt(ptr_operand, irb.getInt64Ty());
-        Value* type = ConstantInt::get(i8_ty, type_num);
-        PointerType* p_ty = dyn_cast<PointerType>(ptr_operand->getType());
-        Value* size = ConstantInt::get(i16_ty, dat_layout.getTypeStoreSize(p_ty->getElementType()));
-      
-      
-        uint32_t instid_count = 0;
-        if (MDNode* mdnode = inst->getMetadata(TRACE_DEBUG_DATA)) {
-          instid_count = (uint32_t) std::stoi(cast<MDString>(mdnode->getOperand(0))->getString().str());
-        }
-        Constant* instid = ConstantInt::get(i32_ty, instid_count);
-      
-      
         Value* sm = getSm(irb);
         Value* warpp = getWarpp(irb);
-      
-      
+        Constant* instid_const = ConstantInt::get(i32_ty, instid);
+
+        
         // insert volatile filter if exists
         Value* to_be_traced = info->to_be_traced;
         insertFilterVolatile(irb, &to_be_traced, info, sm, warpp);
-      
+
+        // create call
         Value* trace_call_args[] = {
           info->alloc, info->commit,
           info->flushed, info->signal,
           info->records, addr,
           info->grid, info->cta_serial,
           info->warpv, info->lane,
-          instid, info->kernel,
+          instid_const, info->kernel,
           sm, warpp,
-          size,
-          type, to_be_traced
+          to_be_traced
         };
         irb.CreateCall(trace_call, trace_call_args);
+
+
+        
+        // append inst info to the header
+        
+        PointerType* p_ty = dyn_cast<PointerType>(ptr_operand->getType());
+        uint32_t req_size = dat_layout.getTypeStoreSize(p_ty->getElementType());
+
+        debuginfo_not_found = debuginfo_not_found
+          || appendInstHeader(inst_headers, inst, instid++, type_num, req_size);
       }
+      
+
+      return !debuginfo_not_found;
+
     }
 
 
   
-    void instrumentScheduling(Function* func, IRBuilderBase::InsertPoint ipfront,
+    bool instrumentScheduling(Function* kernel, IRBuilderBase::InsertPoint ipfront,
                               ArrayRef<Instruction*> retinsts,
-                              TraceInfoValues* info) {
+                              TraceInfoValues* info,
+                              std::vector<trace_header_inst_t>& inst_headers) {
     
-      IRBuilder<> irb(func->front().getFirstNonPHI());
-      irb.restoreIP(ipfront);
-
+      bool debuginfo_not_found = false;
+      uint32_t instid = inst_headers.size()+1;
+      IRBuilder<> irb(kernel->front().getFirstNonPHI());
 
       // trace call
-      Value* addr = ConstantInt::get(i64_ty, 0);
-      Value* instid = ConstantInt::get(i32_ty, 0);
-      Value* size = ConstantInt::get(i16_ty, 0);
-      Value* type = ConstantInt::get(i8_ty, RECORD_EXECUTE);
+      irb.restoreIP(ipfront);
+      Value* addr = ConstantInt::get(i64_ty, -1);
+      Value* instid_arg = ConstantInt::get(i32_ty, instid);
       Value* sm = getSm(irb);
       Value* warpp = getWarpp(irb);
       
@@ -875,18 +896,19 @@ namespace cuprof {
           info->records, addr,
           info->grid, info->cta_serial,
           info->warpv, info->lane,
-          instid, info->kernel,
+          instid_arg, info->kernel,
           sm, warpp,
-          size,
-          type, to_be_traced
+          to_be_traced
       };
-      
       irb.CreateCall(trace_call, trace_call_args);
+
+      debuginfo_not_found = debuginfo_not_found
+        || appendInstHeader(inst_headers, kernel, instid++, RECORD_EXECUTE, 0);
 
 
       // trace ret
-      addr = ConstantInt::get(i64_ty, 0);
-      type = ConstantInt::get(i8_ty, RECORD_RETURN);
+      //addr = ConstantInt::get(i64_ty, 0);
+      //type = ConstantInt::get(i8_ty, RECORD_RETURN);
     
       for (Instruction* inst : retinsts) {
         irb.SetInsertPoint(inst);
@@ -895,7 +917,8 @@ namespace cuprof {
           report_fatal_error("invalid access type encountered, this should not have happened");
         }
 
-      
+        
+        instid_arg = ConstantInt::get(i32_ty, instid);
         Value* sm = getSm(irb);
         Value* warpp = getWarpp(irb);
       
@@ -910,10 +933,9 @@ namespace cuprof {
           info->records, addr,
           info->grid, info->cta_serial,
           info->warpv, info->lane,
-          instid, info->kernel,
+          instid_arg, info->kernel,
           sm, warpp,
-          size,
-          type, to_be_traced
+          to_be_traced
         };
         irb.CreateCall(trace_call, trace_call_args);
 
@@ -923,8 +945,15 @@ namespace cuprof {
           info->lane
         };
         irb.CreateCall(trace_ret_call, trace_ret_call_args);
+
         
+        
+        debuginfo_not_found = debuginfo_not_found
+          || appendInstHeader(inst_headers, inst, instid++, RECORD_RETURN, 0);
       }
+
+
+      return debuginfo_not_found;
     }
 
 
@@ -951,7 +980,6 @@ namespace cuprof {
     
 
       bool debug_without_problem = true; // All debug data is written without problem
-      std::vector<byte> debugdata;
       for (Function* kernel : getKernelFunctions(module)) {
 
       
@@ -967,20 +995,24 @@ namespace cuprof {
       
         TraceInfoValues info;
         IRBuilderBase::InsertPoint ipfront = setupTraceInfo(kernel, &info);
-      
-        debug_without_problem &= appendAndGetKernelDebugData(kernel, debugdata, accesses);
+
+
+        
+//        trace_header_kernel_t* kernel_header =
+//          initKernelDebugData(kernel, accesses.size() + retinsts.size() + 1);
+
+        std::vector<trace_header_inst_t> inst_header;
         
         
         if (args.trace_mem) {
-          instrumentMemAccess(kernel, accesses, &info);
+          instrumentMemAccess(kernel, accesses, &info, inst_header);
         }
-        
-        setDebugData(kernel, debugdata);
-        debugdata.clear();
 
         if (args.trace_thread) {
-          instrumentScheduling(kernel, ipfront, retinsts, &info);
+          instrumentScheduling(kernel, ipfront, retinsts, &info, inst_header);
         }
+
+        setKernelHeader(kernel, inst_header);
       }
     
       if (!debug_without_problem) {

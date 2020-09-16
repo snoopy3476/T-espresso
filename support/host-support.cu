@@ -157,7 +157,7 @@ typedef struct kernel_trace_arg_t {
 } kernel_trace_arg_t;
 
 //////////
-//static uint8_t buf_tmp[RECORDS_PER_SLOT * RECORD_SIZE];
+//static uint8_t buf_tmp[RECORDS_PER_SLOT * RECORD_MAX_SIZE];
 
 class TraceConsumer {
 public:
@@ -238,25 +238,25 @@ public:
     
     cudaChecked(cudaHostAlloc(&traceinfo.records_h,
                               SLOTS_PER_STREAM_IN_A_DEV
-                              * RECORDS_PER_SLOT * RECORD_SIZE,
+                              * RECORDS_PER_SLOT * RECORD_MAX_SIZE,
                               cudaHostAllocMapped));
     cudaChecked(cudaHostGetDevicePointer(&traceinfo.info_d.records_d,
                                          traceinfo.records_h,
                                          0));
     memset(traceinfo.records_h, 0,
-           SLOTS_PER_STREAM_IN_A_DEV * RECORDS_PER_SLOT * RECORD_SIZE);
+           SLOTS_PER_STREAM_IN_A_DEV * RECORDS_PER_SLOT * RECORD_MAX_SIZE);
 
 #else
     
     traceinfo.records_h = (uint8_t*) malloc(SLOTS_PER_STREAM_IN_A_DEV
-                                            * RECORDS_PER_SLOT * RECORD_SIZE);
+                                            * RECORDS_PER_SLOT * RECORD_MAX_SIZE);
     always_assert(traceinfo.records_h);
     cudaChecked(cudaMalloc(&traceinfo.info_d.records_d,
                            SLOTS_PER_STREAM_IN_A_DEV
-                           * RECORDS_PER_SLOT * RECORD_SIZE));
+                           * RECORDS_PER_SLOT * RECORD_MAX_SIZE));
     cudaChecked(cudaMemsetAsync(traceinfo.info_d.records_d, 0,
                                 SLOTS_PER_STREAM_IN_A_DEV
-                                * RECORDS_PER_SLOT * RECORD_SIZE,
+                                * RECORDS_PER_SLOT * RECORD_MAX_SIZE,
                                 cudastream_trace));
 
 #endif
@@ -457,106 +457,38 @@ protected:
 #ifndef CUPROF_RECBUF_MAPPED
     
     // get device records
-    cudaChecked(cudaMemcpyAsync(records_h + (start_i*RECORD_SIZE),
-                                records_d + (start_i*RECORD_SIZE),
-                                (rec_count*RECORD_SIZE), cudaMemcpyDeviceToHost,
+    cudaChecked(cudaMemcpyAsync(records_h + (start_i*RECORD_MAX_SIZE),
+                                records_d + (start_i*RECORD_MAX_SIZE),
+                                (rec_count*RECORD_MAX_SIZE), cudaMemcpyDeviceToHost,
                                 cudastream_trace));
     cudaChecked(cudaStreamSynchronize(cudastream_trace));
-    cudaChecked(cudaMemsetAsync(records_d + (start_i*RECORD_SIZE),
-                                0, (rec_count*RECORD_SIZE), cudastream_trace));
+    cudaChecked(cudaMemsetAsync(records_d + (start_i*RECORD_MAX_SIZE),
+                                0, (rec_count*RECORD_MAX_SIZE), cudastream_trace));
 
 #endif
     
-    //tracefile_write(out, records_h + (start_i*RECORD_SIZE), rec_count * RECORD_SIZE);
-
-
-    tracefile_write(out, records_h, rec_count * RECORD_SIZE);
-    //memcpy(buffer, records_h, RECORDS_PER_SLOT * RECORD_SIZE);//////////////////
-    
-    //uint64_t count_max = *(uint64_t*)(records_h + RECORD_HEADER_SIZE);
-    //int64_t count_max = 0;
-    //for (int i = 0; i < 5; i++) {
-    //  uint64_t count_now = *(uint64_t*)(records_h + RECORD_SIZE * i + RECORD_HEADER_SIZE);
-    //  count_max |= count_now;
-    //}
-    //memset(records_h + (start_i*RECORD_SIZE), 0, rec_count * RECORD_SIZE); // records (H)
-    //write(out->file, records_h + (start_i*RECORD_SIZE), rec_count * RECORD_SIZE);
-    //memcpy(buf_tmp + (start_i*RECORD_SIZE), records_h + (start_i*RECORD_SIZE), rec_count * RECORD_SIZE);/////////
-
-
-
-    /*
-    
-    static char rec_orig[TRACE_RECORD_SIZE(32)];
-    trace_record_t* const rec = (trace_record_t* const) rec_orig;
-    //memcpy(buf_tmp, records_h, RECORDS_PER_SLOT * RECORD_SIZE);//////////////
-
-
-    trace_record_addr_t* addr_unit_cur;
-    //for (int i = 0; i < signal; i++) {
-      
-    for (int32_t count = 0; count < rec_count; count++) {
-      int i = (start_i + count) & (RECORDS_PER_SLOT-1);
-      //printf("FLUSHING (%u, %d)\n", signal, i);//////////////////
-      
-      trace_deserialize((record_t*)&records_h[i * RECORD_SIZE], rec);
-
-      rec->addr_len = 1;
-      addr_unit_cur = rec->addr_unit;
-
-      // lane 0 is already set, so starts with lane 1
-      for (int32_t lane = 1; lane < 32; lane++) {
-
-        uint64_t addr_new = rec->addr_unit[lane].addr;
-        
-        // set offset
-        if (addr_unit_cur->count == 1) {
-          int64_t offset = (int64_t) addr_new - addr_unit_cur->addr;
-          if ((offset & 0xFFFFFFFFFF000000) == 0x0 ||
-              (offset & 0xFFFFFFFFFF000000) == 0xFFFFFFFFFF000000) {
-            addr_unit_cur->offset = (int32_t) (offset & 0xFFFFFFFF);
-          }
-        }
-
-        // same offset - increment current addr_unit count
-        if (addr_new == addr_unit_cur->addr +
-            (addr_unit_cur->offset * addr_unit_cur->count)) {
-          addr_unit_cur->count += 1;
-        }
-
-        // different offset - add new addr_unit
-        else {
-          rec->addr_len += 1;
-          addr_unit_cur = &rec->addr_unit[rec->addr_len - 1];
-          addr_unit_cur->count = 1;
-          addr_unit_cur->addr = addr_new;
-        }
- 
-      }
-      
-      
-      trace_write_record(out, rec);
+    //tracefile_write(out, records_h + (start_i*RECORD_MAX_SIZE), rec_count * RECORD_MAX_SIZE);
+    if (! tracefile_write(out, records_h, rec_count * RECORD_MAX_SIZE)) {
+      fprintf(stderr, "Trace Write Error!\n");
     }
-    */
 
-    
     // reset the read slot
-    memset(records_h, 0, RECORDS_PER_SLOT * RECORD_SIZE);
+    memset(records_h, 0, RECORDS_PER_SLOT * RECORD_MAX_SIZE);
 
     
     /*
     if (start_i == end_i) {
       memset(records_h, 0,
-             RECORDS_PER_SLOT * RECORD_SIZE); // records (H)
+             RECORDS_PER_SLOT * RECORD_MAX_SIZE); // records (H)
     }
     else if (start_i < end_i) {
-      memset(records_h + start_i * RECORD_SIZE, 0,
-             (end_i-start_i) * RECORD_SIZE); // records (H)
+      memset(records_h + start_i * RECORD_MAX_SIZE, 0,
+             (end_i-start_i) * RECORD_MAX_SIZE); // records (H)
     }
     else {
-      memset(records_h, 0, end_i * RECORD_SIZE);
-      memset(records_h + start_i * RECORD_SIZE, 0,
-             (RECORDS_PER_SLOT - start_i) * RECORD_SIZE);
+      memset(records_h, 0, end_i * RECORD_MAX_SIZE);
+      memset(records_h + start_i * RECORD_MAX_SIZE, 0,
+             (RECORDS_PER_SLOT - start_i) * RECORD_MAX_SIZE);
     }
     */
     
@@ -630,7 +562,7 @@ protected:
 
     for(int slot = 0; slot < SLOTS_PER_STREAM_IN_A_DEV; slot++) {
       offset[slot] = slot * CACHELINE;
-      records_offset[slot] = slot * RECORDS_PER_SLOT * RECORD_SIZE;
+      records_offset[slot] = slot * RECORDS_PER_SLOT * RECORD_MAX_SIZE;
     }
 
     int64_t tot_loop = 0;
@@ -752,7 +684,7 @@ public:
   
   TraceManager() {
     initConsumers();
-    buffer = (uint8_t*) malloc(RECORD_SIZE * RECORDS_PER_SLOT);/////////////////
+    buffer = (uint8_t*) malloc(RECORD_MAX_SIZE * RECORDS_PER_SLOT);/////////////////
     //device_count = 0;
   }
 

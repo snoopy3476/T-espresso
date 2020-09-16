@@ -135,7 +135,7 @@ int main(int argc, char** argv) {
       trace_header_inst_t* inst_info = &kernel_info->insts[r->instid];
 
       // size
-      printf(" %" PRIu32, r->req_size);
+      printf(" %" PRIu32, r->meta);
 
       for (int32_t addr_i = 0; addr_i < r->addr_len; addr_i++) {
         trace_record_addr_t* acc_addr = &r->addr_unit[addr_i];
