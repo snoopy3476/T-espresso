@@ -164,6 +164,9 @@ public:
 
   //*********************************
   TraceConsumer(int device) {
+
+    int debug_count = 0;
+    printf("%lf - TraceConsumer[%d] (%d)\n", rtclock(), device, debug_count++); //////////////////////////////////////
     
     // backup the currently set device before the constructor,
     // then set device for class initialization
@@ -305,20 +308,30 @@ public:
     
     // revert set device to the device before the constructor
     cudaChecked(cudaSetDevice(device_initial));
+    
+    printf("%lf - TraceConsumer[%d] (%d)\n", rtclock(), device, debug_count++); //////////////////////////////////////
   }
 
   virtual ~TraceConsumer() {
+    int debug_count = 0;
+    printf("%lf - ~TraceConsumer[%d] (%d)\n", rtclock(), device, debug_count++); //////////////////////////////////////
     //stop(NULL);
     to_be_terminated = true;
     std::atomic_thread_fence(std::memory_order_release);
     should_run = false;
     cv_refresh_consume.notify_all();
     worker_thread.join();
+
+    printf("%lf - ~TraceConsumer[%d] (%d)\n", rtclock(), device, debug_count++); //////////////////////////////////////
     
     trace_write_close(tracefile);
 
+    printf("%lf - ~TraceConsumer[%d] (%d)\n", rtclock(), device, debug_count++); //////////////////////////////////////
+    
     cudaChecked(cudaStreamDestroy(cudastream_trace));
 
+    printf("%lf - ~TraceConsumer[%d] (%d)\n", rtclock(), device, debug_count++); //////////////////////////////////////
+    
     cudaFree(traceinfo.info_d.allocs_d);
     cudaFree(traceinfo.info_d.commits_d);
     //cudaFree(traceinfo.flusheds_h);
@@ -333,6 +346,8 @@ public:
     cudaFree(traceinfo.info_d.records_d);
     free(traceinfo.records_h);
 #endif
+    
+    printf("%lf - ~TraceConsumer[%d] (%d)\n", rtclock(), device, debug_count++); //////////////////////////////////////
   }
 
   //******************************
@@ -457,18 +472,18 @@ protected:
 #ifndef CUPROF_RECBUF_MAPPED
     
     // get device records
-    cudaChecked(cudaMemcpyAsync(records_h + (start_i*RECORD_MAX_SIZE),
-                                records_d + (start_i*RECORD_MAX_SIZE),
-                                (rec_count*RECORD_MAX_SIZE), cudaMemcpyDeviceToHost,
+    cudaChecked(cudaMemcpyAsync(records_h, // + (start_i*RECORD_MAX_SIZE),
+                                records_d, // + (start_i*RECORD_MAX_SIZE),
+                                (RECORDS_PER_SLOT*RECORD_MAX_SIZE), cudaMemcpyDeviceToHost,
                                 cudastream_trace));
     cudaChecked(cudaStreamSynchronize(cudastream_trace));
-    cudaChecked(cudaMemsetAsync(records_d + (start_i*RECORD_MAX_SIZE),
-                                0, (rec_count*RECORD_MAX_SIZE), cudastream_trace));
+    cudaChecked(cudaMemsetAsync(records_d,// + (start_i*RECORD_MAX_SIZE),
+                                0, (RECORDS_PER_SLOT*RECORD_MAX_SIZE), cudastream_trace));
 
 #endif
     
     //tracefile_write(out, records_h + (start_i*RECORD_MAX_SIZE), rec_count * RECORD_MAX_SIZE);
-    if (! tracefile_write(out, records_h, rec_count * RECORD_MAX_SIZE)) {
+    if (! tracefile_write(out, records_h, RECORDS_PER_SLOT * RECORD_MAX_SIZE)) {
       fprintf(stderr, "Trace Write Error!\n");
     }
 
@@ -524,7 +539,9 @@ protected:
   }
 
   // payload function of queue consumer
-  static void consume(TraceConsumer* obj) {    
+  static void consume(TraceConsumer* obj) {
+    int debug_count = 0;
+    printf("%lf - consume[%d] (%d)\n", rtclock(), obj->device, debug_count++); //////////////////////////////////////
 
     cudaSetDevice(obj->device);
     obj->does_run = true;
@@ -557,6 +574,9 @@ protected:
                                    }); // wait for refresh
     }
 
+    
+    printf("%lf - consume[%d] (%d)\n", rtclock(), obj->device, debug_count++); //////////////////////////////////////
+    
     uint32_t offset[SLOTS_PER_STREAM_IN_A_DEV];
     uint32_t records_offset[SLOTS_PER_STREAM_IN_A_DEV];
 
@@ -632,6 +652,8 @@ protected:
                                      return obj->refreshConsumeImmediately();
                                    }); // wait for refresh
     }
+
+    printf("%lf - consume[%d] (%d)\n", rtclock(), obj->device, debug_count++); //////////////////////////////////////
 
     //printf("tot_time = %lf (%ld)\n", (double)tot_time * 1.0e-6, tot_seq);/////////////
     //if (max_seq > 0)

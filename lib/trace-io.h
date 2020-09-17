@@ -45,7 +45,7 @@ extern "C" {
 #define TRACE_KERNELNAME_MAXLEN_BYTES (((TRACE_KERNELNAME_MAXLEN_BITS)+8-1)/8) // ceil
 #define TRACE_KERNELNAME_MAXLEN (1 << (TRACE_KERNELNAME_MAXLEN_BITS))
 
-#define min(x, y) ((x) < (y) ? (x) : (y))
+#define MIN(x, y) ((x) < (y) ? (x) : (y))
   
 /****************
  * Trace Struct *
@@ -78,7 +78,7 @@ extern "C" {
     uint32_t row;
     uint32_t col;
     uint32_t inst_filename_len;
-    const char* inst_filename;
+    char* inst_filename;
   } trace_header_inst_t;
 
   typedef struct {
@@ -137,7 +137,7 @@ extern "C" {
 #define TRACE_RECORD_SIZE(addr_len)                                     \
   (sizeof(trace_record_t) + sizeof(trace_record_addr_t) * (addr_len - 1))
 #define CONST_MAX(x, y) ((x) > (y) ? (x) : (y))
-
+#include <errno.h> ///////////////////////////////////////////
   
 
 /******************
@@ -159,7 +159,7 @@ extern "C" {
     else {
       return_val->file = open(filename,
                               (mode == TRACEFILE_WRITE)
-                              ? (O_WRONLY | O_CREAT | O_APPEND | O_TRUNC)
+                              ? (O_WRONLY | O_CREAT | O_APPEND | O_TRUNC | O_DIRECT)
                               : (O_RDONLY),
                               S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
     }
@@ -172,7 +172,7 @@ extern "C" {
 
     return_val->buf_commits = 0;
     if (mode == TRACEFILE_WRITE) {
-      return_val->buf = (byte*) malloc(TRACEFILE_BUF_SIZE);
+      return_val->buf = (byte*) aligned_alloc(512, TRACEFILE_BUF_SIZE);
       if (return_val->buf == NULL) {
         close(return_val->file);
         free(return_val);
@@ -183,11 +183,26 @@ extern "C" {
     return return_val;
   }
   
+#include <sys/time.h>
+static inline double rttclock()
+{
+  struct timezone Tzp;
+  struct timeval Tp;
+  int stat;
+  stat = gettimeofday (&Tp, &Tzp);
+  if (stat != 0) printf("Error return from gettimeofday: %d",stat);
+  return(Tp.tv_sec + Tp.tv_usec*1.0e-6);
+}
+
+  
   static inline int tracefile_close(tracefile_t tracefile) {
 
+    int debug_count = 0;
+    printf("%lf - tracefile_close (%d)\n", rttclock(), debug_count++); //////////////////////////////////////
     if (tracefile == NULL)
       return 0;
 
+    printf("%lf - tracefile_close (%d)\n", rttclock(), debug_count++); //////////////////////////////////////
 
     // if unwritten data remains in the buffer, flush to file
     if (tracefile->buf_commits > 0) {
@@ -196,16 +211,27 @@ extern "C" {
             tracefile->buf_commits);
     }
 
+    printf("%lf - tracefile_close (%d)\n", rttclock(), debug_count++); //////////////////////////////////////
+    
     int close_result = close(tracefile->file);
     if (close_result == -1)
       return 0;
 
+    
+    printf("%lf - tracefile_close (%d)\n", rttclock(), debug_count++); //////////////////////////////////////
+    
     if (tracefile->buf != NULL) {
       free(tracefile->buf);
     }
 
+    
+    printf("%lf - tracefile_close (%d)\n", rttclock(), debug_count++); //////////////////////////////////////
+    
     free(tracefile);
 
+    
+    printf("%lf - tracefile_close (%d)\n", rttclock(), debug_count++); //////////////////////////////////////
+    
     return 1;
   }
 
@@ -223,10 +249,13 @@ extern "C" {
     
     // if overflow is expected after write, then flush to file first
     if (tracefile->buf_commits + size >= TRACEFILE_BUF_SIZE) {
-      return_val = (write(tracefile->file,
-                          tracefile->buf,
-                          tracefile->buf_commits)
-                          == (ssize_t)tracefile->buf_commits);
+      ssize_t write_size = write(tracefile->file,
+                                 tracefile->buf,
+                                 tracefile->buf_commits);
+      return_val = (write_size == (ssize_t)tracefile->buf_commits);
+      //printf("tracefile_write - %ld / %ld\n", write_size, tracefile->buf_commits);///////////////////
+      if (write_size < 0)
+        printf("ERROR - %s\n", strerror(errno)); /////////////////
       tracefile->buf_commits = 0;
     }
 
@@ -284,7 +313,7 @@ extern "C" {
     //offset += int_serialize(buf + offset, 4, (uint32_t)-1); // kernel header size
     offset += int_serialize(buf + offset, 4, kernel_header->insts_count); // inst count
     offset += int_serialize(buf + offset, TRACE_KERNELNAME_MAXLEN_BYTES,
-                            min(TRACE_KERNELNAME_MAXLEN,
+                            MIN(TRACE_KERNELNAME_MAXLEN,
                                 kernel_header->kernel_name_len)); // kernel name len
     
     memcpy(buf + offset,
@@ -368,7 +397,7 @@ extern "C" {
     offset += int_deserialize(&kernel_header->kernel_name_len,
                               TRACE_KERNELNAME_MAXLEN_BYTES,
                               serial_data + offset);
-    kernel_header->kernel_name_len = min(TRACE_KERNELNAME_MAXLEN,
+    kernel_header->kernel_name_len = MIN(TRACE_KERNELNAME_MAXLEN,
                                          kernel_header->kernel_name_len);
     //////////////////////// remove std::min in InstrumentDevice.cpp /////////////
     

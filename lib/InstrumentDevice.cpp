@@ -748,7 +748,7 @@ namespace cuprof {
         inst_header.row = debug->getLine();
         inst_header.col = debug->getColumn();
         inst_header.inst_filename_len = path_len;
-        inst_header.inst_filename = path.data();
+        inst_header.inst_filename = (char*) path.data();
         //memcpy(inst_header.inst_filename, path.c_str(), path_len);
       }
       else if (const DISubprogram* debug = isa<Function>(target) ?
@@ -761,7 +761,7 @@ namespace cuprof {
         inst_header.row = debug->getLine();
         inst_header.col = 0;
         inst_header.inst_filename_len = path_len;
-        inst_header.inst_filename = path.data();
+        inst_header.inst_filename = (char*) path.data();
       }
       else {
         debuginfo_not_found = true;
