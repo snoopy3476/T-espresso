@@ -1,4 +1,5 @@
 #include <set>
+#include <iostream>
 #include <cuda_runtime_api.h>
 
 
@@ -236,9 +237,9 @@ namespace cuprof {
     ///////////////////////////////////////////////////////////////
     bool registerFuncToGetDebugData(Module& module, const std::string kernel_name) {
 
-      std::string varname_kdata = getSymbolNameForKernel(kernel_name, CUPROF_SYMBOL_DATA_VAR);
-      std::string varname_kid = getSymbolNameForKernel(kernel_name, CUPROF_SYMBOL_KERNEL_ID);
-      std::string funcname = getSymbolNameForKernel(kernel_name, CUPROF_SYMBOL_DATA_FUNC);
+      std::string varname_kdata = getSymbolName(kernel_name, CUPROF_SYMBOL_DATA_VAR);
+      std::string varname_kid = getSymbolName(kernel_name, CUPROF_SYMBOL_KERNEL_ID);
+      std::string funcname = getSymbolName(kernel_name, CUPROF_SYMBOL_DATA_FUNC);
 
       
       // get symbols for arguments of a function to be called
@@ -310,6 +311,7 @@ namespace cuprof {
 
       // add a function
       LLVMContext& ctx = module.getContext();
+      
       FunctionCallee ctor_callee =
         module.getOrInsertFunction(ctor_name.getSingleStringRef(), void_ty);
       Function* ctor = dyn_cast<Function>(ctor_callee.getCallee());
@@ -398,13 +400,13 @@ namespace cuprof {
         std::string kernel_name = kernel_name_ref.str();
         registerFuncToGetDebugData(module, kernel_name); /////////////////////////
 
-        std::string kdata_name = getSymbolNameForKernel(kernel_name,
-                                                        CUPROF_SYMBOL_DATA_VAR);
+        std::string kdata_name = getSymbolName(kernel_name,
+                                               CUPROF_SYMBOL_DATA_VAR);
         if (GlobalVariable* gv_kdata = module.getNamedGlobal(kdata_name)) {
           gvs.push_back(gv_kdata);
         }
-        std::string kid_name = getSymbolNameForKernel(kernel_name,
-                                                      CUPROF_SYMBOL_KERNEL_ID);
+        std::string kid_name = getSymbolName(kernel_name,
+                                             CUPROF_SYMBOL_KERNEL_ID);
         if (GlobalVariable* gv_kid = module.getNamedGlobal(kid_name)) {
           gvs.push_back(gv_kid);
         }
@@ -414,7 +416,9 @@ namespace cuprof {
       GlobalVariable *gv = getOrInsertGlobalVar(module, trace_info_ty,
                                                 CUPROF_TRACE_BASE_INFO);
       
-      registerFuncToGlobalCtor(module, cuprof_gvsym_set_up, {gv}, "___cuprof_base_name");
+      std::string symbol_name = getSymbolName(module.getModuleIdentifier(),
+                                              CUPROF_SYMBOL_BASE_NAME);
+      registerFuncToGlobalCtor(module, cuprof_gvsym_set_up, {gv}, symbol_name);
       gvs.push_back(gv);
 
       // register all items in the list
@@ -514,18 +518,18 @@ namespace cuprof {
 
       // patch calls
       /*
-      for (KCall& kcall : getAnalysis<LocateKCallsPass>().getLaunchList()) {
+        for (KCall& kcall : getAnalysis<LocateKCallsPass>().getLaunchList()) {
       
         // kernel filtering
         if (kernel_filtering && !isKernelToBeTraced(kcall.kernel_obj, args.kernel))
-          continue;
+        continue;
 
       
         // patch kernel call
         patchKernelCall(kcall.configure_call,
-                        kcall.kernel_launch,
-                        kcall.kernel_obj->getName());
-      }
+        kcall.kernel_launch,
+        kcall.kernel_obj->getName());
+        }
       */
 
     

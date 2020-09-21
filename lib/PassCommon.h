@@ -31,6 +31,7 @@ enum CuprofSymbolType {
   CUPROF_SYMBOL_DATA_VAR,
   CUPROF_SYMBOL_DATA_FUNC,
   CUPROF_SYMBOL_KERNEL_ID,
+  CUPROF_SYMBOL_BASE_NAME,
   CUPROF_SYMBOL_END,
 };
 
@@ -43,12 +44,13 @@ enum CuprofSymbolType {
 const char * const SYMBOL_TYPE_STR[] = {
   "___cuprof_accdat_var_",
   "___cuprof_accdat_func_",
-  "___cuprof_kernel_id_"
+  "___cuprof_kernel_id_",
+  "___cuprof_base_name_"
 };
 
 
 
-static std::string getSymbolNameForKernel(const llvm::Twine &kernel_name,
+static std::string getSymbolName(const llvm::Twine &kernel_name,
                                           CuprofSymbolType type) {
   
   if (type >= CUPROF_SYMBOL_END || type < (CuprofSymbolType)0)
@@ -57,9 +59,9 @@ static std::string getSymbolNameForKernel(const llvm::Twine &kernel_name,
   return (SYMBOL_TYPE_STR[type] + kernel_name).str();
 }
 
-static std::string getSymbolNameForKernel(const std::string &kernel_name,
+static std::string getSymbolName(const std::string &kernel_name,
                                           CuprofSymbolType type) {
-  return getSymbolNameForKernel(llvm::Twine(kernel_name), type);
+  return getSymbolName(llvm::Twine(kernel_name), type);
 }
 
 

@@ -509,7 +509,7 @@ protected:
     
     
     // ensure commits, counts, records are reset first
-    uint32_t zero = 0;
+    //uint32_t zero = 0;
     //cudaChecked(cudaMemcpyAsync(commit_d,
     //                            &zero,
     //                            sizeof(uint32_t), cudaMemcpyHostToDevice,
@@ -557,6 +557,7 @@ protected:
 
     tracefile_t tracefile = obj->tracefile;
     
+
     cudaChecked(cudaMemsetAsync(allocs_d, 0,
                                 SLOTS_PER_STREAM_IN_A_DEV * CACHELINE,
                                 cudastream_trace));

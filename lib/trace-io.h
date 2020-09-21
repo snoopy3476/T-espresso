@@ -159,7 +159,7 @@ extern "C" {
     else {
       return_val->file = open(filename,
                               (mode == TRACEFILE_WRITE)
-                              ? (O_WRONLY | O_CREAT | O_APPEND | O_TRUNC | O_DIRECT)
+                              ? (O_WRONLY | O_CREAT | O_APPEND | O_TRUNC) // | O_DIRECT)
                               : (O_RDONLY),
                               S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
     }
@@ -172,7 +172,7 @@ extern "C" {
 
     return_val->buf_commits = 0;
     if (mode == TRACEFILE_WRITE) {
-      return_val->buf = (byte*) aligned_alloc(512, TRACEFILE_BUF_SIZE);
+      return_val->buf = (byte*) malloc(TRACEFILE_BUF_SIZE); //aligned_alloc(512, TRACEFILE_BUF_SIZE);
       if (return_val->buf == NULL) {
         close(return_val->file);
         free(return_val);

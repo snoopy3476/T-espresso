@@ -194,7 +194,7 @@ namespace cuprof {
 
   
     GlobalVariable* getOrInsertGlobalVariableExtern(Module& module, Type* ty,
-                                               const char* name) {
+                                                    const char* name) {
       GlobalVariable* gv = module.getNamedGlobal(name);
 
       if (!gv) {
@@ -210,7 +210,7 @@ namespace cuprof {
     }
 
     void setKernelHeader(Function* kernel,
-                            std::vector<trace_header_inst_t>& inst_debugdata) {
+                         std::vector<trace_header_inst_t>& inst_debugdata) {
 
       
       // allocate space for kernel header struct
@@ -251,7 +251,7 @@ namespace cuprof {
       LLVMContext& ctx = module.getContext();
 
       const std::string varname_str =
-        getSymbolNameForKernel(kernel_name, CUPROF_SYMBOL_DATA_VAR);
+        getSymbolName(kernel_name, CUPROF_SYMBOL_DATA_VAR);
       
       GlobalVariable* debugdata = module.getNamedGlobal(varname_str.c_str());
       if (debugdata != nullptr) {
@@ -604,8 +604,8 @@ namespace cuprof {
       //std::string kernel_name = ;
       GlobalVariable* kernel_id_ptr = getOrInsertGlobalVariableExtern(
         module, i32_ty,
-        getSymbolNameForKernel(kernel->getName().str(),
-                               CUPROF_SYMBOL_KERNEL_ID).c_str()
+        getSymbolName(kernel->getName().str(),
+                      CUPROF_SYMBOL_KERNEL_ID).c_str()
         );
       Value* kernel_id = irb.CreateLoad(kernel_id_ptr, "kernel_id");
       GlobalVariable* trace_info = getOrInsertGlobalVariableExtern(
@@ -891,14 +891,14 @@ namespace cuprof {
     
     
       Value* trace_call_args[] = {
-          info->alloc, info->commit,
-          info->flushed, info->signal,
-          info->records, addr,
-          info->grid, info->cta_serial,
-          info->warpv, info->lane,
-          instid_arg, info->kernel,
-          sm, warpp,
-          to_be_traced
+        info->alloc, info->commit,
+        info->flushed, info->signal,
+        info->records, addr,
+        info->grid, info->cta_serial,
+        info->warpv, info->lane,
+        instid_arg, info->kernel,
+        sm, warpp,
+        to_be_traced
       };
       irb.CreateCall(trace_call, trace_call_args);
 
