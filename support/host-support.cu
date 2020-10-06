@@ -162,6 +162,9 @@ typedef struct kernel_trace_arg_t {
 class TraceConsumer {
 public:
 
+  TraceConsumer() {
+  }
+
   //*********************************
   TraceConsumer(int device) {
 
@@ -211,6 +214,8 @@ public:
     memset(traceinfo.flusheds_h, 0,
            SLOTS_PER_STREAM_IN_A_DEV * CACHELINE);
     */
+    
+      
     cudaChecked(cudaMalloc(&traceinfo.info_d.flusheds_d,
                            SLOTS_PER_STREAM_IN_A_DEV * CACHELINE));
     cudaChecked(cudaMemsetAsync(traceinfo.info_d.flusheds_d, 0,
@@ -300,6 +305,7 @@ public:
     
     cudaDeviceSynchronize();
     worker_thread = std::thread(consume, this);
+    printf("TraceConsumer\t[Dev: %d, Stream: %p, A: %p, C: %p, FH: %p, FO: %p, S: %p, RD: %p, RH: %p]\n", device, cudastream_trace, traceinfo.info_d.allocs_d, traceinfo.info_d.commits_d, traceinfo.flusheds_h, traceinfo.flusheds_old, traceinfo.signals_h, traceinfo.info_d.records_d, traceinfo.records_h); //////////////////////////////////////
 
     mtx_refresh_consume.unlock();
 
@@ -309,12 +315,13 @@ public:
     // revert set device to the device before the constructor
     cudaChecked(cudaSetDevice(device_initial));
     
-    printf("%lf - TraceConsumer[%d] (%d)\n", rtclock(), device, debug_count++); //////////////////////////////////////
+    //printf("%lf - TraceConsumer[%d] (%d)\n", rtclock(), device, debug_count++); //////////////////////////////////////
+
   }
 
   virtual ~TraceConsumer() {
     int debug_count = 0;
-    printf("%lf - ~TraceConsumer[%d] (%d)\n", rtclock(), device, debug_count++); //////////////////////////////////////
+    //printf("%lf - ~TraceConsumer[%d] (%d)\n", rtclock(), device, debug_count++); //////////////////////////////////////
     //stop(NULL);
     to_be_terminated = true;
     std::atomic_thread_fence(std::memory_order_release);
@@ -322,15 +329,15 @@ public:
     cv_refresh_consume.notify_all();
     worker_thread.join();
 
-    printf("%lf - ~TraceConsumer[%d] (%d)\n", rtclock(), device, debug_count++); //////////////////////////////////////
+    //printf("%lf - ~TraceConsumer[%d] (%d)\n", rtclock(), device, debug_count++); //////////////////////////////////////
     
     trace_write_close(tracefile);
 
-    printf("%lf - ~TraceConsumer[%d] (%d)\n", rtclock(), device, debug_count++); //////////////////////////////////////
+    //printf("%lf - ~TraceConsumer[%d] (%d)\n", rtclock(), device, debug_count++); //////////////////////////////////////
     
     cudaChecked(cudaStreamDestroy(cudastream_trace));
 
-    printf("%lf - ~TraceConsumer[%d] (%d)\n", rtclock(), device, debug_count++); //////////////////////////////////////
+    //printf("%lf - ~TraceConsumer[%d] (%d)\n", rtclock(), device, debug_count++); //////////////////////////////////////
     
     cudaFree(traceinfo.info_d.allocs_d);
     cudaFree(traceinfo.info_d.commits_d);
@@ -347,7 +354,7 @@ public:
     free(traceinfo.records_h);
 #endif
     
-    printf("%lf - ~TraceConsumer[%d] (%d)\n", rtclock(), device, debug_count++); //////////////////////////////////////
+    //printf("%lf - ~TraceConsumer[%d] (%d)\n", rtclock(), device, debug_count++); //////////////////////////////////////
   }
 
   //******************************
@@ -470,13 +477,16 @@ protected:
       end_i - start_i + RECORDS_PER_SLOT;
 
 #ifndef CUPROF_RECBUF_MAPPED
-    
+ 
     // get device records
     cudaChecked(cudaMemcpyAsync(records_h, // + (start_i*RECORD_MAX_SIZE),
                                 records_d, // + (start_i*RECORD_MAX_SIZE),
-                                (RECORDS_PER_SLOT*RECORD_MAX_SIZE), cudaMemcpyDeviceToHost,
+                                (RECORDS_PER_SLOT*RECORD_MAX_SIZE),
+                                cudaMemcpyDeviceToHost,
                                 cudastream_trace));
+    
     cudaChecked(cudaStreamSynchronize(cudastream_trace));
+    
     cudaChecked(cudaMemsetAsync(records_d,// + (start_i*RECORD_MAX_SIZE),
                                 0, (RECORDS_PER_SLOT*RECORD_MAX_SIZE), cudastream_trace));
 
@@ -515,6 +525,8 @@ protected:
     //                            sizeof(uint32_t), cudaMemcpyHostToDevice,
     //                            cudastream_trace));
     std::atomic_thread_fence(std::memory_order_release);
+    //printf("sync [%p]\n", cudastream_trace); /////////////////////
+    printf("sync\t[Stream: %p, A: %p, C: %p, FH: %p, FO: %p, S: %p, RD: %p, RH: %p]\n", cudastream_trace, alloc_d, commit_d, flushed_h, flushed_old, signal_h, records_d, records_h); //////////////////////////////////////
     cudaChecked(cudaStreamSynchronize(cudastream_trace));
     //*vcount = 0; // counts (H)
     //cudaChecked(cudaMemcpyAsync(alloc_d,
@@ -541,7 +553,6 @@ protected:
   // payload function of queue consumer
   static void consume(TraceConsumer* obj) {
     int debug_count = 0;
-    printf("%lf - consume[%d] (%d)\n", rtclock(), obj->device, debug_count++); //////////////////////////////////////
 
     cudaSetDevice(obj->device);
     obj->does_run = true;
@@ -556,6 +567,9 @@ protected:
     cudaStream_t cudastream_trace = obj->cudastream_trace;
 
     tracefile_t tracefile = obj->tracefile;
+
+    
+    printf("consume\t[Dev: %d, Stream: %p, A: %p, C: %p, FH: %p, FO: %p, S: %p, RD: %p, RH: %p]\n", obj->device, cudastream_trace, allocs_d, commits_d, flusheds_h, flusheds_old, signals_h, records_d, records_h); //////////////////////////////////////
     
 
     cudaChecked(cudaMemsetAsync(allocs_d, 0,
@@ -576,7 +590,7 @@ protected:
     }
 
     
-    printf("%lf - consume[%d] (%d)\n", rtclock(), obj->device, debug_count++); //////////////////////////////////////
+    //printf("%lf - consume[%d] (%d)\n", rtclock(), obj->device, debug_count++); //////////////////////////////////////
     
     uint32_t offset[SLOTS_PER_STREAM_IN_A_DEV];
     uint32_t records_offset[SLOTS_PER_STREAM_IN_A_DEV];
