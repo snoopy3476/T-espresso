@@ -626,8 +626,8 @@ namespace cuprof {
       //slot_i = irb.CreateMul(slot_i, ConstantInt::get(i64_ty, RECORD_MAX_SIZE));
       
       Value* base_i = irb.CreateMul(slot, ConstantInt::get(i32_ty, CACHELINE));
-      Value* slot_i = irb.CreateMul(slot, ConstantInt::get(i32_ty, RECORDS_PER_SLOT));
-      slot_i = irb.CreateMul(slot_i, ConstantInt::get(i32_ty, RECORD_MAX_SIZE));
+      Value* slot_i = irb.CreateMul(slot, ConstantInt::get(i32_ty, SLOT_SIZE));
+      //slot_i = irb.CreateMul(slot_i, ConstantInt::get(i32_ty, RECORD_MAX_SIZE));
 
       Value* allocs_ptr = irb.CreateStructGEP(nullptr, trace_info, 0);
       Value* alloc = irb.CreateLoad(allocs_ptr, "alloc");

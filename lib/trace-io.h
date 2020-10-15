@@ -51,7 +51,7 @@ extern "C" {
  * Trace Struct *
  ****************/
   
-#define TRACEFILE_BUF_SIZE (RECORD_MAX_SIZE * RECORDS_PER_SLOT * sizeof(byte) * 4)
+#define TRACEFILE_BUF_SIZE (SLOT_SIZE * SLOTS_PER_STREAM_IN_A_DEV * 4)
 #define TRACE_HEADER_BUF_SIZE_UNIT (1024 * 1024)
   
   
@@ -198,11 +198,11 @@ static inline double rttclock()
   static inline int tracefile_close(tracefile_t tracefile) {
 
     int debug_count = 0;
-    printf("%lf - tracefile_close (%d)\n", rttclock(), debug_count++); //////////////////////////////////////
+    //printf("%lf - tracefile_close (%d)\n", rttclock(), debug_count++); //////////////////////////////////////
     if (tracefile == NULL)
       return 0;
 
-    printf("%lf - tracefile_close (%d)\n", rttclock(), debug_count++); //////////////////////////////////////
+    //printf("%lf - tracefile_close (%d)\n", rttclock(), debug_count++); //////////////////////////////////////
 
     // if unwritten data remains in the buffer, flush to file
     if (tracefile->buf_commits > 0) {
@@ -211,26 +211,26 @@ static inline double rttclock()
             tracefile->buf_commits);
     }
 
-    printf("%lf - tracefile_close (%d)\n", rttclock(), debug_count++); //////////////////////////////////////
+    //printf("%lf - tracefile_close (%d)\n", rttclock(), debug_count++); //////////////////////////////////////
     
     int close_result = close(tracefile->file);
     if (close_result == -1)
       return 0;
 
     
-    printf("%lf - tracefile_close (%d)\n", rttclock(), debug_count++); //////////////////////////////////////
+    //printf("%lf - tracefile_close (%d)\n", rttclock(), debug_count++); //////////////////////////////////////
     
     if (tracefile->buf != NULL) {
       free(tracefile->buf);
     }
 
     
-    printf("%lf - tracefile_close (%d)\n", rttclock(), debug_count++); //////////////////////////////////////
+    //printf("%lf - tracefile_close (%d)\n", rttclock(), debug_count++); //////////////////////////////////////
     
     free(tracefile);
 
     
-    printf("%lf - tracefile_close (%d)\n", rttclock(), debug_count++); //////////////////////////////////////
+    //printf("%lf - tracefile_close (%d)\n", rttclock(), debug_count++); //////////////////////////////////////
     
     return 1;
   }
@@ -255,7 +255,7 @@ static inline double rttclock()
       return_val = (write_size == (ssize_t)tracefile->buf_commits);
       //printf("tracefile_write - %ld / %ld\n", write_size, tracefile->buf_commits);///////////////////
       if (write_size < 0)
-        printf("ERROR - %s\n", strerror(errno)); /////////////////
+        fprintf(stderr, "ERROR - %s\n", strerror(errno)); /////////////////
       tracefile->buf_commits = 0;
     }
 
@@ -426,8 +426,8 @@ static inline double rttclock()
              serial_data + offset,
              inst_header->inst_filename_len); // inst filename
       offset += inst_header->inst_filename_len;
-
-      if (i != inst_header->instid) {
+      printf("%u, %u\n", i, inst_header->instid);
+      if (i+1 != inst_header->instid) {
         trace_last_error = "failed to deserialize kernel header";
         return 0;
       }

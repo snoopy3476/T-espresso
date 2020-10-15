@@ -11,12 +11,12 @@ extern "C" {
 
 // Size of a record in bytes, contents of a record:
 // 32 bit meta info, 32bit size, 64 bit address, 64 bit cta id
-#define RECORD_MAX_SIZE 296 //56
+#define RECORD_MAX_SIZE 304 //56
 // 6M buffer, devided into 4 parallel slots.
 // Buffers: SLOTS_PER_STREAM_IN_A_DEV * RECORDS_PER_SLOT * RECORD_MAX_SIZE
 // Absolute minimum is the warp size, all threads in a warp must collectively
 // wait or be able to write a record
-#define RECORDS_PER_SLOT ((size_t)4096)
+#define SLOT_SIZE ((size_t)4096*RECORD_MAX_SIZE)
 // Number of slots must be power of two!
 #define SLOTS_PER_STREAM_IN_A_DEV (64)
 
@@ -50,8 +50,8 @@ extern "C" {
   ((dividend)/(divisor) + ((dividend)%(divisor) ? 1 : 0))
 
 
-
-#define RECORD_HEADER_SIZE 48
+#define RECORD_HEADER_UNIT 6
+#define RECORD_HEADER_SIZE (RECORD_HEADER_UNIT * 8)
 #define RECORD_SIZE(addr_len)          \
   (((RECORD_HEADER_SIZE) + (8 * (addr_len))))
 

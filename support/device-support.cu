@@ -3,6 +3,18 @@
 extern "C" {
 
 
+
+#define __match_any_sync_macro(active, val, return_mask)  { \
+  return_mask = 0; \
+  for (int i = 31; i >= 0; i--) { \
+    uint32_t cur_mask = (val == __shfl_sync(active, val, i)); \
+    return_mask <<= 1; \
+    return_mask += cur_mask; \
+  } \
+}
+
+  
+
 /****************************************************
  *  void ___cuprof_trace();
  *
@@ -36,19 +48,63 @@ extern "C" {
     volatile uint32_t* signal_v = signal;
 
     uint32_t rec_offset;
+    uint32_t flushed_cur;
+
+
+
+
+    
+    uint32_t msb = (uint32_t)(addr >> 32);
+    int is_msb_same = 1;
+    //uint64_t msb = addr & 0xFFFFFFFF00000000;
+    //int addr_len;
+    //__match_all_sync(active, msb, &addr_len);
+
+    // addr delta mask
+    
+    uint64_t addr_prev = __shfl_up_sync(active, addr, 1);
+    uint64_t addr_next = __shfl_down_sync(active, addr, 1);
+    uint64_t addr_delta_prev = addr - addr_prev;
+    uint64_t addr_delta_next = addr_next - addr;
+    int is_delta_changed = (addr_delta_prev != addr_delta_next);
+    
+    uint32_t subfilter_1 = __ballot_sync(active, is_delta_changed);
+
+    uint32_t is_inactive_prev = active << 1;
+    uint32_t is_inactive_next = active >> 1;
+    uint32_t is_prev_set = subfilter_1 << 1;
+    uint32_t inactive_no_write = is_inactive_next | is_prev_set;
+    uint32_t inactive_force_write = ~is_inactive_prev;
+
+    uint32_t subfilter_2 = (subfilter_1 & inactive_no_write) | inactive_force_write;
+
+    uint32_t prev_lanes_write_mask = subfilter_2 << (32-1 - lane);
+    uint32_t consec_write = __clz(~prev_lanes_write_mask);
+    uint32_t is_write = consec_write & 0x1;
+    
+    uint32_t filter = __ballot_sync(active, is_write);
+
+    
+    uint8_t write_pos = __popc(prev_lanes_write_mask);
+    uint8_t write_count = __popc(filter);
+    uint64_t record_size = RECORD_SIZE(write_count); //RECORD_SIZE(write_count);
+    
 
 
     // allocate space in slot
     if (lane == lowest) {
 
       // get the allocated offset
-      uint32_t alloc_raw = atomicInc(alloc, UINT32_MAX);
-      rec_offset = alloc_raw & (RECORDS_PER_SLOT-1);
+      uint32_t alloc_raw = atomicAdd(alloc, record_size); //atomicInc(alloc, UINT32_MAX);
+      //rec_offset = alloc_raw & (RECORDS_PER_SLOT-1);
 
       // wait until slot is not full
-      while ((alloc_raw - *flushed_v) >= RECORDS_PER_SLOT);
+      do {
+        flushed_cur = *flushed_v;
+      } while ((rec_offset = alloc_raw - flushed_cur) >= SLOT_SIZE - 32);
 
-
+      // map alloc to physical buf
+      //rec_offset = alloc_raw - flushed_now;
 
       ////////// WRITE DISTRIBUTION (OFF) //////////
 
@@ -76,20 +132,23 @@ extern "C" {
 
     // write header
 
-    uint64_t header_info[6];
+    //__match_all_sync(active, msb, &pred);
+    
+
+    uint64_t header_info[RECORD_HEADER_UNIT];
     header_info[0] = RECORD_SET_INIT_IDX_0(0, instid, kernid, warpv);
     header_info[1] = RECORD_SET_INIT_IDX_1(ctaid_serial);
     header_info[2] = RECORD_SET_INIT_IDX_2(grid);
     header_info[3] = RECORD_SET_INIT_IDX_3(warpp, sm);
     header_info[4] = RECORD_SET_INIT_IDX_4(clock);
-    header_info[5] = RECORD_SET_INIT_IDX_5(addr, active);
+    header_info[5] = is_msb_same ? RECORD_SET_INIT_IDX_5(addr, active) : 0;
 
     rec_offset = __shfl_sync(active, rec_offset, lowest);
 
     volatile record_header_t* rec_header =
-      (record_header_t*) &(records[rec_offset * RECORD_MAX_SIZE]);
+      (record_header_t*) &(records[rec_offset]);
 
-    for (int i = rlane_id; i < 5; i += n_active) {
+    for (int i = rlane_id; i < RECORD_HEADER_UNIT; i += n_active) {
       *((uint64_t*)rec_header + i) = header_info[i];
     }
 
@@ -106,10 +165,17 @@ extern "C" {
     /////////////////////////////////////////////
 
 
+    //uint32_t filter_final = active;
+
+    //uint32_t write_pos = lane;
+    //uint32_t is_write = 1;
+    
     // write reqeusted addrs for each lane
-    volatile uint64_t* rec_addr = (uint64_t*) &(records[(rec_offset) * RECORD_MAX_SIZE +
-                                                        RECORD_SIZE(lane)]);
-    *rec_addr = (uint64_t) addr;
+    if (is_write) {
+      volatile uint64_t* rec_addr =
+        (uint64_t*) &(records[rec_offset + RECORD_SIZE(write_pos)]);
+      *rec_addr = (uint64_t) addr;
+    }
 
 
 
@@ -118,8 +184,37 @@ extern "C" {
 
     // commit space in slot, and send full signal to the host
     if (lane == lowest) {
-      uint32_t commit_raw = atomicInc(commit, UINT32_MAX) + 1;
-      if ((commit_raw & ((RECORDS_PER_SLOT-1))) == 0) {
+      //uint32_t write_count = __popc(filter_final);
+      //if (write_count != 32)
+      //printf("write_count = %u\n%x\n%x\n%u\n%u\n%u\n\n%x\n%x\n%x)\n", write_count, addr_prev, addr_next, addr_delta_prev, addr_delta_next, is_delta_changed, subfilter_1, subfilter_2, filter);//////////////////
+      uint32_t commit_raw = atomicAdd(commit, record_size) + record_size; //atomicInc(commit, UINT32_MAX) + 1;
+
+      /*
+      printf("\n\n\n"
+             "addr_prev:        \t%08lX\n"
+             "addr_next:        \t%08lX\n"
+             "addr_delta_prev:  \t%08lX\n"
+             "addr_delta_next:  \t%08lX\n"
+             "is_delta_changed: \t%d\n"
+             "subfilter_1:      \t%08X\n"
+             "is_inactive_prev: \t%08X\n"
+             "is_inactive_next: \t%08X\n"
+             "is_prev_set:      \t%08X\n"
+             "inactive_n_write: \t%08X\n"
+             "inactive_f_write: \t%08X\n"
+             "subfilter_2:      \t%08X\n"
+             "prev_la_w_mask:   \t%u\n"
+             "consec_write:     \t%u\n"
+             "is_write:         \t%u\n"
+             "filter:           \t%08X\n"
+             "write_pos:        \t%u\n"
+             "write_count:      \t%u\n"
+             "record_size:      \t%lu\n"
+             ,
+           addr_prev, addr_next, addr_delta_prev, addr_delta_next, is_delta_changed, subfilter_1, is_inactive_prev, is_inactive_next, is_prev_set, inactive_no_write, inactive_force_write, subfilter_2, prev_lanes_write_mask, consec_write, is_write, filter, write_pos, write_count, record_size);
+      */
+      
+      if (commit_raw - flushed_cur >= SLOT_SIZE - 32) { //(commit_raw & ((RECORDS_PER_SLOT-1))) == 0) {
         *signal_v = commit_raw; // request flush to host
         //__threadfence_system();
       }
