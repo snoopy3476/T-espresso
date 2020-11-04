@@ -512,7 +512,7 @@ namespace cuprof {
     
 
       // if kernel args is set, kernel filtering is enabled
-      bool kernel_filtering = (args.kernel.size() != 0);
+      //bool kernel_filtering = (args.kernel.size() != 0);
 
 
 

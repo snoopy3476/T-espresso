@@ -11,18 +11,22 @@ extern "C" {
 
 // Size of a record in bytes, contents of a record:
 // 32 bit meta info, 32bit size, 64 bit address, 64 bit cta id
-#define RECORD_MAX_SIZE 304 //56
+#define RECORD_MAX_SIZE RECORD_SIZE(32) //56
 // 6M buffer, devided into 4 parallel slots.
 // Buffers: SLOTS_PER_STREAM_IN_A_DEV * RECORDS_PER_SLOT * RECORD_MAX_SIZE
 // Absolute minimum is the warp size, all threads in a warp must collectively
 // wait or be able to write a record
-#define SLOT_SIZE ((size_t)4096*RECORD_MAX_SIZE)
+// SLOT_SIZE: need to be power of two for performance
+#define UNIT_SLOT_SIZE ((size_t) 0x80000) // 2MB
+#define MULTI_BUF_COUNT (4)
+#define SLOT_SIZE (UNIT_SLOT_SIZE * MULTI_BUF_COUNT)
+//((size_t) 4096*(RECORD_MAX_SIZE) + (RECORD_MAX_SIZE))
 // Number of slots must be power of two!
 #define SLOTS_PER_STREAM_IN_A_DEV (64)
 
 #define CACHELINE (128)
 
-#define CUPROF_RECBUF_MAPPED
+//#define CUPROF_RECBUF_MANAGED
 
 
 

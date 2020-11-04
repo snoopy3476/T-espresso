@@ -51,7 +51,7 @@ extern "C" {
  * Trace Struct *
  ****************/
   
-#define TRACEFILE_BUF_SIZE (SLOT_SIZE * SLOTS_PER_STREAM_IN_A_DEV * 4)
+#define TRACEFILE_BUF_SIZE (SLOT_SIZE * 4)
 #define TRACE_HEADER_BUF_SIZE_UNIT (1024 * 1024)
   
   
@@ -196,13 +196,10 @@ static inline double rttclock()
 
   
   static inline int tracefile_close(tracefile_t tracefile) {
-
-    int debug_count = 0;
-    //printf("%lf - tracefile_close (%d)\n", rttclock(), debug_count++); //////////////////////////////////////
+    
     if (tracefile == NULL)
       return 0;
 
-    //printf("%lf - tracefile_close (%d)\n", rttclock(), debug_count++); //////////////////////////////////////
 
     // if unwritten data remains in the buffer, flush to file
     if (tracefile->buf_commits > 0) {
@@ -210,28 +207,18 @@ static inline double rttclock()
             tracefile->buf,
             tracefile->buf_commits);
     }
-
-    //printf("%lf - tracefile_close (%d)\n", rttclock(), debug_count++); //////////////////////////////////////
     
     int close_result = close(tracefile->file);
     if (close_result == -1)
       return 0;
 
     
-    //printf("%lf - tracefile_close (%d)\n", rttclock(), debug_count++); //////////////////////////////////////
-    
     if (tracefile->buf != NULL) {
       free(tracefile->buf);
     }
 
-    
-    //printf("%lf - tracefile_close (%d)\n", rttclock(), debug_count++); //////////////////////////////////////
-    
     free(tracefile);
 
-    
-    //printf("%lf - tracefile_close (%d)\n", rttclock(), debug_count++); //////////////////////////////////////
-    
     return 1;
   }
 
@@ -243,8 +230,6 @@ static inline double rttclock()
   static inline int tracefile_write(tracefile_t tracefile,
                                     const void* src, size_t size) {
 
-    //write(tracefile->file, src, size);///////////
-    //return 1;/////////////////
     int return_val = 1;
     
     // if overflow is expected after write, then flush to file first
@@ -253,9 +238,6 @@ static inline double rttclock()
                                  tracefile->buf,
                                  tracefile->buf_commits);
       return_val = (write_size == (ssize_t)tracefile->buf_commits);
-      //printf("tracefile_write - %ld / %ld\n", write_size, tracefile->buf_commits);///////////////////
-      if (write_size < 0)
-        fprintf(stderr, "ERROR - %s\n", strerror(errno)); /////////////////
       tracefile->buf_commits = 0;
     }
 
@@ -484,10 +466,12 @@ static inline double rttclock()
 
   
   static trace_t* trace_open(const char* filename) {
-
+    int debug_count = 0;
+    printf("%d\n", debug_count++);//////////////////
     tracefile_t input_file;
     input_file = tracefile_open(filename, TRACEFILE_READ);
     
+    printf("%d\n", debug_count++);//////////////////
     
     byte delim_buf[CONST_MAX(sizeof(TRACE_HEADER_PREFIX),
                              sizeof(TRACE_HEADER_POSTFIX) + 5)];
@@ -500,6 +484,8 @@ static inline double rttclock()
       return NULL;
     }
 
+    printf("%d\n", debug_count++);//////////////////
+    
     // get trace header length
     uint32_t accdat_len;
     if (! tracefile_read(input_file, delim_buf, sizeof(uint32_t))) {
@@ -509,6 +495,7 @@ static inline double rttclock()
     int_deserialize(&accdat_len, 4, delim_buf);
 
 
+    printf("%d\n", debug_count++);//////////////////
     
     // read access data part from header
     byte* accdat = (byte*) malloc(accdat_len);
@@ -517,23 +504,41 @@ static inline double rttclock()
       return NULL;
     }
 
+    printf("%d\n", debug_count++);//////////////////
+    
     if (! tracefile_read(input_file, accdat, accdat_len)) {
       trace_last_error = "failed to read trace header";
       return NULL;
     }
 
+    printf("%d\n", debug_count++);//////////////////
+    
     // allocate trace_t
     trace_t* res = (trace_t*) malloc(offsetof(trace_t, record) + TRACE_RECORD_SIZE(32));
     res->kernel_accdat = (trace_header_kernel_t**) malloc(sizeof(trace_header_kernel_t*) * 256);
 
     
+    printf("%d\n", debug_count++);//////////////////
+    
     // build memory access data for each kernels
     uint64_t kernel_count = 0;
 
     res->kernel_accdat[0] = &empty_kernel;
+    
+    printf("%d\n", debug_count++);//////////////////
+    
     for (uint32_t offset = 0; offset < accdat_len; kernel_count++) {
+      
+      printf("\t%d\n", debug_count++);//////////////////
+      
       size_t kernel_header_size = get_kernel_header_bytes_after_deserialize(accdat + offset);
+      
+      printf("\t%d\n", debug_count++);//////////////////
+      
       trace_header_kernel_t* kernel_cur = (trace_header_kernel_t*) malloc(kernel_header_size);
+      
+      printf("\t%d\n", debug_count++);//////////////////
+      
       if (!kernel_cur) {
         trace_last_error = "failed to allocate memory";
         return NULL;
@@ -541,7 +546,12 @@ static inline double rttclock()
       
       res->kernel_accdat[kernel_count+1] = kernel_cur;
 
+      printf("\t%d\n", debug_count++);//////////////////
+      
       size_t kernel_data_size = header_deserialize(kernel_cur, accdat + offset);
+      
+      printf("\t%d\n", debug_count++);//////////////////
+      
       if (kernel_data_size == 0) {
         trace_last_error = "failed to deserialize kernel header";
         return NULL;

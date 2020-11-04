@@ -94,7 +94,7 @@ static std::string traceName(int device) {
   
   std::string device_str = std::to_string(device);
   
-  const char* pattern_env = getenv("CUPROF_TRACE_PATTERN");
+  const char* pattern_env = getenv("CUPROF_TRACE_FILE");
   std::string pattern;
   if (pattern_env) {
     pattern = pattern_env;
@@ -177,7 +177,7 @@ public:
     cudaChecked(cudaGetDevice(&device_initial));
     cudaChecked(cudaSetDevice(device));
 
-    mtx_refresh_consume.lock();
+    //mtx_refresh_consume.lock();
     int range[2];
     cudaChecked(cudaDeviceGetStreamPriorityRange(&range[0], &range[1]));
     cudaChecked(cudaStreamCreateWithPriority(&cudastream_trace,
@@ -242,8 +242,8 @@ public:
            SLOTS_PER_STREAM_IN_A_DEV * CACHELINE);
 
 
-#ifdef CUPROF_RECBUF_MAPPED
-    
+#ifndef CUPROF_RECBUF_MANAGED
+
     cudaChecked(cudaHostAlloc(&traceinfo.records_h,
                               SLOTS_PER_STREAM_IN_A_DEV
                               * SLOT_SIZE,
@@ -254,23 +254,20 @@ public:
     memset(traceinfo.records_h, 0,
            SLOTS_PER_STREAM_IN_A_DEV * SLOT_SIZE);
 
+    
 #else
-    
-    traceinfo.records_h = (uint8_t*) malloc(SLOTS_PER_STREAM_IN_A_DEV
-                                            * SLOT_SIZE);
-    always_assert(traceinfo.records_h);
-    cudaChecked(cudaMalloc(&traceinfo.info_d.records_d,
-                           SLOTS_PER_STREAM_IN_A_DEV
-                           * SLOT_SIZE));
+
+    cudaChecked(cudaMallocManaged(&traceinfo.records_h,
+                                  SLOTS_PER_STREAM_IN_A_DEV
+                                  * SLOT_SIZE));
+    traceinfo.info_d.records_d = traceinfo.records_h;
     cudaChecked(cudaMemsetAsync(traceinfo.info_d.records_d, 0,
-                                SLOTS_PER_STREAM_IN_A_DEV
-                                * SLOT_SIZE,
+                                SLOTS_PER_STREAM_IN_A_DEV * SLOT_SIZE,
                                 cudastream_trace));
-
+    
 #endif
-    
-    
 
+    
     // initialize traceinfo of the device
     if (___cuprof_trace_base_info) {
       cudaChecked(cudaMemcpyToSymbolAsync(___cuprof_trace_base_info,
@@ -285,7 +282,7 @@ public:
     
     should_run = true;
     does_run = false;
-    to_be_terminated = false;
+    //to_be_terminated = false;
 
     pipe_name = traceName(device);
     tracefile = trace_write_open(this->pipe_name.c_str());
@@ -305,59 +302,42 @@ public:
     
     cudaDeviceSynchronize();
     worker_thread = std::thread(consume, this);
-    //printf("TraceConsumer\t[Dev: %d, Stream: %p, A: %p, C: %p, FH: %p, FO: %p, S: %p, RD: %p, RH: %p]\n", device, cudastream_trace, traceinfo.info_d.allocs_d, traceinfo.info_d.commits_d, traceinfo.flusheds_h, traceinfo.flusheds_old, traceinfo.signals_h, traceinfo.info_d.records_d, traceinfo.records_h); //////////////////////////////////////
 
-    mtx_refresh_consume.unlock();
-
-    //start(NULL, "(tmp)", 0, 0);
+    //mtx_refresh_consume.unlock();
 
     
     // revert set device to the device before the constructor
     cudaChecked(cudaSetDevice(device_initial));
-    
-    //printf("%lf - TraceConsumer[%d] (%d)\n", rtclock(), device, debug_count++); //////////////////////////////////////
-
   }
 
   virtual ~TraceConsumer() {
-    int debug_count = 0;
-    //printf("%lf - ~TraceConsumer[%d] (%d)\n", rtclock(), device, debug_count++); //////////////////////////////////////
-    //stop(NULL);
-    to_be_terminated = true;
-    std::atomic_thread_fence(std::memory_order_release);
+    //to_be_terminated = true;
+    //std::atomic_thread_fence(std::memory_order_release);
     should_run = false;
-    cv_refresh_consume.notify_all();
+    //cv_refresh_consume.notify_all();
     worker_thread.join();
 
-    //printf("%lf - ~TraceConsumer[%d] (%d)\n", rtclock(), device, debug_count++); //////////////////////////////////////
-    
     trace_write_close(tracefile);
-
-    //printf("%lf - ~TraceConsumer[%d] (%d)\n", rtclock(), device, debug_count++); //////////////////////////////////////
     
     cudaChecked(cudaStreamDestroy(cudastream_trace));
-
-    //printf("%lf - ~TraceConsumer[%d] (%d)\n", rtclock(), device, debug_count++); //////////////////////////////////////
+    
     
     cudaFree(traceinfo.info_d.allocs_d);
     cudaFree(traceinfo.info_d.commits_d);
-    //cudaFree(traceinfo.flusheds_h);
-    //cudaFreeHost(traceinfo.flusheds_h);
     cudaFree(traceinfo.info_d.flusheds_d);
     free(traceinfo.flusheds_old);
     cudaFreeHost(traceinfo.signals_h);
 
-#ifdef CUPROF_RECBUF_MAPPED
+#ifndef CUPROF_RECBUF_MANAGED
     cudaFreeHost(traceinfo.records_h);
+
 #else
     cudaFree(traceinfo.info_d.records_d);
-    free(traceinfo.records_h);
-#endif
     
-    //printf("%lf - ~TraceConsumer[%d] (%d)\n", rtclock(), device, debug_count++); //////////////////////////////////////
+#endif
   }
 
-  //******************************
+  /*
   void start(cudaStream_t stream_target, const char* name,
              uint64_t grid_dim, uint16_t cta_size) {
     stream_mutex.lock();
@@ -397,42 +377,40 @@ public:
     stream_mutex.unlock();
   }
 
-  //*****************************
   bool refreshConsumeImmediately() {
     return should_run || to_be_terminated;
   }
-
+  */
   
   
 protected:
-
-  //**************************************
+/*
   bool addStream(cudaStream_t stream_target) {
-    bool return_value = false;
+  bool return_value = false;
     
-    auto found_target = std::find(stream.begin(), stream.end(), stream_target);
-    if (found_target == stream.end()) {
-      stream.push_back(stream_target);
-      return_value = true;
-    }
+  auto found_target = std::find(stream.begin(), stream.end(), stream_target);
+  if (found_target == stream.end()) {
+  stream.push_back(stream_target);
+  return_value = true;
+  }
     
-    return return_value;
+  return return_value;
   }
 
   bool removeStream(cudaStream_t stream_target) {
-    bool return_value = false;
+  bool return_value = false;
     
-    auto found_target = std::find(stream.begin(), stream.end(), stream_target);
-    if (found_target != stream.end()) {
-      stream.erase(found_target);
-      return_value = true;
-    }
-    
-    return return_value;
+  auto found_target = std::find(stream.begin(), stream.end(), stream_target);
+  if (found_target != stream.end()) {
+  stream.erase(found_target);
+  return_value = true;
   }
-  
+    
+  return return_value;
+  }
+*/
   // clear up a slot if it is full
-  static int consumeSlot(uint8_t* alloc_d, uint8_t* commit_d,
+  static void consumeSlot(uint8_t* alloc_d, uint8_t* commit_d,
                          uint8_t* signal_h,
                          uint8_t* flushed_h, uint8_t* flushed_old,
                          uint8_t* records_d, uint8_t* records_h,
@@ -442,124 +420,121 @@ protected:
     volatile uint32_t* signal_v = (uint32_t*)signal_h;
     volatile uint32_t* flushed_v = (uint32_t*)flushed_h;
     volatile uint32_t* flushed_old_v = (uint32_t*)flushed_old;
+    volatile uint64_t* records_h_lu = (uint64_t*) records_h;
     uint32_t* flushed_d = (uint32_t*)flushed_h;
+
 
     
     uint32_t signal = *signal_v;
     uint32_t signal_old = *flushed_old_v;
 
-
-    /*
-    if ( signal == 0 )
-      return 1;
-    uint32_t rec_count = signal;
-    */
-
-    if (signal == signal_old) {
-      return 0;
+    // get commit value manually when exit program
+    if (!is_kernel_active) {
+      cudaChecked(cudaMemcpyAsync(&signal, commit_d, sizeof(uint32_t),
+                                  cudaMemcpyDeviceToHost));
+      cudaChecked(cudaStreamSynchronize(cudastream_trace));
     }
 
-    //long long start_t = rtclocku();
 
-    //printf("wow [%u, %u]\n", signal, signal_old);//////////////
-
-    //printf("FLUSH_START (%u)\n", signal);//////////////////////
+    // check if to be flushed
+    if ( (uint32_t)(signal - signal_old - 1) >= SLOT_SIZE ) {
+      return;
+    }
 
     // change old flushed value on host
     *flushed_old_v = signal;
-
+    
 
     
-    uint32_t start_i = 0;
-    uint32_t end_i = signal - signal_old;
-    uint32_t flush_size = end_i; //(start_i < end_i) ?
-      //end_i - start_i :
-      //end_i - start_i + RECORDS_PER_SLOT;
 
-#ifndef CUPROF_RECBUF_MAPPED
- 
-    // get device records
-    cudaChecked(cudaMemcpyAsync(records_h, // + (start_i*RECORD_MAX_SIZE),
-                                records_d, // + (start_i*RECORD_MAX_SIZE),
-                                (SLOT_SIZE),
-                                cudaMemcpyDeviceToHost,
-                                cudastream_trace));
+    // set flush ranges
     
-    cudaChecked(cudaStreamSynchronize(cudastream_trace));
-    
-    cudaChecked(cudaMemsetAsync(records_d,// + (start_i*RECORD_MAX_SIZE),
-                                0, (SLOT_SIZE), cudastream_trace));
+    uint32_t start_i = signal_old % SLOT_SIZE;
+    uint32_t end_i = signal % SLOT_SIZE;
+    uint32_t area[2][2];
 
-#endif
+    if (start_i < end_i) {
+      // range of area 1
+      area[0][0] = start_i;
+      area[0][1] = end_i - start_i;
+      // range of area 2
+      area[1][0] = 0;
+      area[1][1] = 0;
+    }
+    else {
+      // range of area 1
+      area[0][0] = start_i;
+      area[0][1] = SLOT_SIZE - start_i;
+      // range of area 2
+      area[1][0] = 0;
+      area[1][1] = end_i;
+    }
     
-    //tracefile_write(out, records_h + (start_i*RECORD_MAX_SIZE), rec_count * RECORD_MAX_SIZE);
-    if (! tracefile_write(out, records_h, flush_size)) {
+
+
+
+    // flush
+    
+    // flush for area 1
+    for (int i = area[0][0]/sizeof(uint64_t);
+         i < (area[0][0] + area[0][1])/sizeof(uint64_t);
+         i++) {
+      while ( !records_h_lu[i] );
+    }
+    
+    if (! tracefile_write(out, records_h + area[0][0], area[0][1])) {
       fprintf(stderr, "Trace Write Error!\n");
     }
 
-    // reset the read slot
-    memset(records_h, 0, flush_size);
+    memset(records_h + area[0][0], 0, area[0][1]);
+    
+    
+
+    // flush for area 2
+    if (area[1][1] != 0) {
+      
+      for (int i = area[1][0]/sizeof(uint64_t);
+           i < (area[1][0] + area[1][1])/sizeof(uint64_t);
+           i++) {
+        while ( !records_h_lu[i] );
+      }
+    
+      if (! tracefile_write(out, records_h + area[1][0], area[1][1])) {
+        fprintf(stderr, "Trace Write Error!\n");
+      }
+
+      memset(records_h + area[1][0], 0, area[1][1]);
+    
+    }
+
+
 
     
-    /*
-    if (start_i == end_i) {
-      memset(records_h, 0,
-             RECORDS_PER_SLOT * RECORD_MAX_SIZE); // records (H)
-    }
-    else if (start_i < end_i) {
-      memset(records_h + start_i * RECORD_MAX_SIZE, 0,
-             (end_i-start_i) * RECORD_MAX_SIZE); // records (H)
-    }
-    else {
-      memset(records_h, 0, end_i * RECORD_MAX_SIZE);
-      memset(records_h + start_i * RECORD_MAX_SIZE, 0,
-             (RECORDS_PER_SLOT - start_i) * RECORD_MAX_SIZE);
-    }
-    */
+    // send signal
     
-    
-    // ensure commits, counts, records are reset first
-    //uint32_t zero = 0;
-    //cudaChecked(cudaMemcpyAsync(commit_d,
-    //                            &zero,
-    //                            sizeof(uint32_t), cudaMemcpyHostToDevice,
-    //                            cudastream_trace));
+    // guarantee all work before flush signal to device
     std::atomic_thread_fence(std::memory_order_release);
-    //printf("sync [%p]\n", cudastream_trace); /////////////////////
-    //printf("sync\t[Stream: %p, A: %p, C: %p, FH: %p, FO: %p, S: %p, RD: %p, RH: %p]\n", cudastream_trace, alloc_d, commit_d, flushed_h, flushed_old, signal_h, records_d, records_h); //////////////////////////////////////
     cudaChecked(cudaStreamSynchronize(cudastream_trace));
-    //*vcount = 0; // counts (H)
-    //cudaChecked(cudaMemcpyAsync(alloc_d,
-    //                            &zero,
-    //                            sizeof(uint32_t), cudaMemcpyHostToDevice,
-    //                            cudastream_trace));
+
+    // flush signal to device
     cudaChecked(cudaMemcpyAsync(flushed_d,
                                 &signal,
                                 sizeof(uint32_t), cudaMemcpyHostToDevice,
                                 cudastream_trace));
-    //*flushed_v = signal;
     
-    //printf("FLUSH_END (%u)\n", signal);//////////////////////
-
-    //long long real_t = rtclocku() - start_t;
-
-
-    //count_stats[count_max]++;
-
     
-    return 1;
+    return;
   }
 
   // payload function of queue consumer
   static void consume(TraceConsumer* obj) {
-    int debug_count = 0;
 
     cudaSetDevice(obj->device);
     obj->does_run = true;
 
     uint8_t* allocs_d = obj->traceinfo.info_d.allocs_d;
     uint8_t* commits_d = obj->traceinfo.info_d.commits_d;
-    uint8_t* flusheds_h = obj->traceinfo.info_d.flusheds_d; //flusheds_h;
+    uint8_t* flusheds_h = obj->traceinfo.flusheds_h;
     uint8_t* flusheds_old = obj->traceinfo.flusheds_old;
     uint8_t* signals_h = obj->traceinfo.signals_h;
     uint8_t* records_d = obj->traceinfo.info_d.records_d;
@@ -569,18 +544,7 @@ protected:
     tracefile_t tracefile = obj->tracefile;
 
     
-    //printf("consume\t[Dev: %d, Stream: %p, A: %p, C: %p, FH: %p, FO: %p, S: %p, RD: %p, RH: %p]\n", obj->device, cudastream_trace, allocs_d, commits_d, flusheds_h, flusheds_old, signals_h, records_d, records_h); //////////////////////////////////////
-    
-
-    cudaChecked(cudaMemsetAsync(allocs_d, 0,
-                                SLOTS_PER_STREAM_IN_A_DEV * CACHELINE,
-                                cudastream_trace));
-    cudaChecked(cudaMemsetAsync(commits_d, 0,
-                                SLOTS_PER_STREAM_IN_A_DEV * CACHELINE,
-                                cudastream_trace));
-    
-    
-    
+    /*
     {
       std::unique_lock<std::mutex> lock_refresh_consume(obj->mtx_refresh_consume);
       obj->cv_refresh_consume.wait(lock_refresh_consume,
@@ -588,9 +552,7 @@ protected:
                                      return obj->refreshConsumeImmediately();
                                    }); // wait for refresh
     }
-
-    
-    //printf("%lf - consume[%d] (%d)\n", rtclock(), obj->device, debug_count++); //////////////////////////////////////
+    */
     
     uint32_t offset[SLOTS_PER_STREAM_IN_A_DEV];
     uint32_t records_offset[SLOTS_PER_STREAM_IN_A_DEV];
@@ -600,88 +562,37 @@ protected:
       records_offset[slot] = slot * SLOT_SIZE;
     }
 
-    int64_t tot_loop = 0;
-    long long tot_time = 0;
-    double prev_time = 0;
-    int64_t tot_seq = 0;
-    int64_t max_seq = 0;
-    int64_t cur_seq = 0;
-    int ret_before = 1;
-    while (!obj->to_be_terminated) {
-
+    //while (!obj->to_be_terminated) {
       
-      while(obj->should_run) {
-        for(int slot = 0; slot < SLOTS_PER_STREAM_IN_A_DEV; slot++) {
-          //double start = rtclock();
-          int ret = consumeSlot(&allocs_d[offset[slot]], &commits_d[offset[slot]],
-                                &signals_h[offset[slot]],
-                                &flusheds_h[offset[slot]],
-                                &flusheds_old[offset[slot]],
-                                &records_d[records_offset[slot]],
-                                &records_h[records_offset[slot]],
-                                tracefile, true, cudastream_trace);
-/*
-          if (ret) {
-            //printf("ret: %d\n", ret);///////////
-
-            tot_time += (long long)ret;
-            tot_seq += 1;
-          }
-*/
-          //double stop = rtclock();
-          /*
-          if (ret_before == 0 && ret == 0) {
-            cur_seq++;
-            tot_time += prev_time;
-          }
-          if (ret_before == 0 && ret == 1) {
-            if (max_seq < cur_seq)
-              max_seq = cur_seq;
-            tot_seq += cur_seq;
-            cur_seq = 0;
-          }
-          
-          ret_before = ret;
-          prev_time = stop - start;
-          */
-          //if (ret == 0)
-          //  tot_seq++;
-          
-        }
-        //tot_loop += SLOTS_PER_STREAM_IN_A_DEV;
-      }
-
-      // after should_run flag has been reset to false, no warps are writing, but
-      // there might still be data in the buffers
+    while(obj->should_run) {
       for(int slot = 0; slot < SLOTS_PER_STREAM_IN_A_DEV; slot++) {
         consumeSlot(&allocs_d[offset[slot]], &commits_d[offset[slot]],
                     &signals_h[offset[slot]], &flusheds_h[offset[slot]],
                     &flusheds_old[offset[slot]], &records_d[records_offset[slot]],
                     &records_h[records_offset[slot]],
-                    tracefile, false, cudastream_trace);
+                    tracefile, true, cudastream_trace);
+          
       }
-      
-      std::unique_lock<std::mutex> lock_refresh_consume(obj->mtx_refresh_consume);
-      obj->cv_refresh_consume.wait(lock_refresh_consume,
-                                   [obj](){
-                                     return obj->refreshConsumeImmediately();
-                                   }); // wait for refresh
     }
 
-    //printf("%lf - consume[%d] (%d)\n", rtclock(), obj->device, debug_count++); //////////////////////////////////////
+    // after should_run flag has been reset to false, no warps are writing, but
+    // there might still be data in the buffers
+    for(int slot = 0; slot < SLOTS_PER_STREAM_IN_A_DEV; slot++) {
+      consumeSlot(&allocs_d[offset[slot]], &commits_d[offset[slot]],
+                  &signals_h[offset[slot]], &flusheds_h[offset[slot]],
+                  &flusheds_old[offset[slot]], &records_d[records_offset[slot]],
+                  &records_h[records_offset[slot]],
+                  tracefile, false, cudastream_trace);
+    }
+    /*
+      std::unique_lock<std::mutex> lock_refresh_consume(obj->mtx_refresh_consume);
+      obj->cv_refresh_consume.wait(lock_refresh_consume,
+      [obj](){
+      return obj->refreshConsumeImmediately();
+      }); // wait for refresh
+    */
+    //}
 
-    //printf("tot_time = %lf (%ld)\n", (double)tot_time * 1.0e-6, tot_seq);/////////////
-    //if (max_seq > 0)
-    //  printf("[max_seq = %ld, tot_seq = %ld / %ld (%lfs)]\n", max_seq, tot_seq, tot_loop, tot_time);////////////
-/*
-    if (obj->device == 0)
-      for (int i = 0; i < 100000; i++) {
-        if (count_stats[i]) {
-          fprintf(stderr, "%d,%d\n", i, count_stats[i]);
-        }
-      }
-    
-*/
     obj->does_run = false;
     return;
   }
@@ -691,11 +602,11 @@ protected:
 
   std::atomic<bool> should_run;
   std::atomic<bool> does_run;
-  std::atomic<bool> to_be_terminated;
+  //std::atomic<bool> to_be_terminated;
 
   
-  std::mutex mtx_refresh_consume;
-  std::condition_variable cv_refresh_consume;
+  //std::mutex mtx_refresh_consume;
+  //std::condition_variable cv_refresh_consume;
 
   tracefile_t tracefile;
   std::thread worker_thread;
@@ -721,8 +632,6 @@ public:
   
   TraceManager() {
     initConsumers();
-    //buffer = (uint8_t*) malloc(SLOT_SIZE);/////////////////
-    //device_count = 0;
   }
 
   void initConsumers() {
@@ -755,7 +664,6 @@ public:
         delete consumers[device];
     }
     delete[] consumers;
-    //free(buffer);/////////////////////
   }
   
   
@@ -832,7 +740,7 @@ extern "C" {
   }
 
 
-
+/*
   
   static void ___cuprof_trace_start_callback(cudaStream_t stream, cudaError_t status, void* vargs) {
     kernel_trace_arg_t* vargs_cast = (kernel_trace_arg_t*)vargs;
@@ -882,5 +790,5 @@ extern "C" {
     *arg = device;
     cudaChecked(cudaStreamAddCallback(stream, ___cuprof_trace_stop_callback, (void*)arg, 0));
   }
-
+*/
 }
