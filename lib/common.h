@@ -105,28 +105,32 @@ extern "C" {
   (*(uint32_t*)RECORD_META_PTR(record, idx))
 #define RECORD_GET_COUNT(record, idx)                           \
   ((int8_t)((*(uint32_t*)RECORD_META_PTR(record, idx)) & 0xFF))
-#define RECORD_GET_OFFSET(record, idx)                  \
+#define RECORD_GET_OFFSET(record, idx)                \
     ((*(int32_t*)RECORD_META_PTR(record, idx)) >> 8)
 
 
-#define RECORD_SET_INIT_IDX_0(addr_len, instid, kernid, warpv)          \
-  ((((uint64_t)(addr_len)) << 56) |                                     \
-   (((uint64_t)(instid) & 0xFFFFFF) << 32) |                            \
-   (((uint64_t)(kernid) & 0xFFFFFF) << 8) |                             \
-   ((uint64_t)(warpv) & 0xFF))
-#define RECORD_SET_INIT_IDX_1(cta)              \
-    ((uint64_t)(cta))
-#define RECORD_SET_INIT_IDX_2(grid)             \
+#define RECORD_SET_HEADER_0(zerocheck, instid, kernid, warpv) \
+    ((((uint64_t)(zerocheck) & 0x7FFFFFFFFFFFFF) << 27) |     \
+     (((uint64_t)(instid) & 0xFFF) << 15) |                   \
+     (((uint64_t)(kernid) & 0x3FF) << 5) |                    \
+     (((uint64_t)(warpv) & 0x1F)))
+#define RECORD_SET_HEADER_1(active, filter)     \
+  ((((uint64_t)(active) & 0xFFFFFFFF) << 32) |  \
+   ((uint64_t)(filter) & 0xFFFFFFFF))
+#define RECORD_SET_HEADER_2(cta)                \
+  ((uint64_t)(cta))
+#define RECORD_SET_HEADER_3(grid)               \
   ((uint64_t)(grid))
-#define RECORD_SET_INIT_IDX_3(warpp, sm)        \
+#define RECORD_SET_HEADER_4(warpp, sm)          \
   ((((uint64_t)(warpp)) << 32) |                \
    ((uint64_t)(sm) & 0xFFFFFFFF))
-#define RECORD_SET_INIT_IDX_4(clock)            \
-  ((uint64_t)(clock))
-#define RECORD_SET_INIT_IDX_5(msb, active)         \
-  (((uint64_t)(msb) & 0xFFFFFFFF00000000) |        \
-   (((uint64_t)(active)) & 0xFFFFFFFF))
-  
+#define RECORD_SET_HEADER_5(msb, clock)         \
+  (((uint64_t)(msb) & 0xFFFFFFFF00000000) |     \
+   ((uint64_t)(clock) & 0xFFFFFFFF))
+
+#define RECORD_SET_DATA(delta, data)            \
+  (((uint64_t)(delta) << 32) |                  \
+   ((uint64_t)(data) & 0xFFFFFFFF))
 
 //#define RECORD_SET_INIT_OPT(addr_len, type, instid, kernid, warpv,    \
 //                            cta,                                        \

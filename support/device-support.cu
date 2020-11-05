@@ -111,6 +111,10 @@ extern "C" {
     
     uint32_t active = __activemask();
     uint32_t lowest = __ffs(active)-1;
+    
+    uint64_t addr_prev_prev = __shfl_up_sync(active, addr, 2);
+    uint64_t addr_prev = __shfl_up_sync(active, addr, 1);
+    uint64_t addr_next = __shfl_down_sync(active, addr, 1);
 
     uint32_t lanemask = (0x1 << lane);
     uint32_t lanemask_prevs = lanemask - 1;
@@ -124,8 +128,15 @@ extern "C" {
 
 
     
-    uint32_t msb = (uint32_t)(addr >> 32);
-    int is_msb_same = 1;
+    uint64_t msb = addr & 0xFFFFFFFF00000000;
+    uint64_t msb_lowest = __shfl_sync(active, msb, lowest);
+    uint64_t msb_delta = msb - msb_lowest;
+    uint32_t is_msb_diff = __ballot_sync(active, msb_delta);
+    
+    //uint64_t msb_delta = 0;
+    //uint32_t is_msb_diff = 0;//__ballot_sync(active, msb_delta);
+    
+    //int is_msb_same = 1;
     //uint64_t msb = addr & 0xFFFFFFFF00000000;
     //int addr_len;
     //__match_all_sync(active, msb, &addr_len);
@@ -133,12 +144,10 @@ extern "C" {
     // addr delta mask
     
 
-    uint64_t addr_prev_prev = __shfl_up_sync(active, addr, 2);
-    uint64_t addr_prev = __shfl_up_sync(active, addr, 1);
-    //uint64_t addr_next = __shfl_down_sync(active, addr, 1);
     //uint64_t addr_delta_prev_prev = addr_prev - addr_prev_prev;
     uint64_t addr_delta_prev = addr_prev - addr_prev_prev;
     uint64_t addr_delta = addr - addr_prev;
+    uint64_t addr_delta_next = addr_next - addr;
     //int is_delta_changed_prev = (addr_delta_prev_prev != addr_delta_prev);
     uint32_t is_delta_changed = (addr_delta != addr_delta_prev);
     //int is_write_f1 = is_delta_changed && is_delta_changed_prev;
@@ -155,9 +164,10 @@ extern "C" {
   
     //uint32_t subfilter_2 = (subfilter_1 | inactive_force_write) & active;
   
+    
     uint32_t filter_raw_prev_lanes = filter_raw << (32-1 - lane);
     uint32_t consec_write = __clz(~filter_raw_prev_lanes);
-    uint32_t is_write = consec_write & 0x1;
+    uint32_t is_write = is_msb_diff | (consec_write & 0x1); // if msb is not same, all thread writes
   
     uint32_t filter = __ballot_sync(active, is_write);
   
@@ -168,6 +178,36 @@ extern "C" {
     uint64_t record_size = RECORD_SIZE(write_count);
 
 
+
+    
+
+    uint64_t header_info[RECORD_HEADER_UNIT];
+    header_info[0] = 1; // ensure first elem to be non-zero
+    header_info[1] = RECORD_SET_HEADER_1(active, (is_msb_diff ? 0 : filter)); // if msb is not same, filter == 0
+    header_info[2] = RECORD_SET_HEADER_2(ctaid_serial);
+    header_info[3] = RECORD_SET_HEADER_3(grid);
+    header_info[4] = RECORD_SET_HEADER_4(warpp, sm);
+    header_info[5] = RECORD_SET_HEADER_5(msb, clock);
+
+    uint64_t data = (is_msb_diff ? addr : RECORD_SET_DATA(addr_delta_next, addr));
+
+
+    // get zerocheck sequence
+    uint32_t data_zero_mask = __ballot_sync(active, data);
+
+    uint64_t zerocheck = 0;
+    for (int i = 0; i < RECORD_HEADER_UNIT; i++) {
+      zerocheck <<= 1;
+      if (header_info[i] == 0) {
+        header_info[i] = -1; // set to non-zero, if header is
+        zerocheck |= ((uint64_t)1 << 32); // above 32-bit: header
+      }
+    }
+    zerocheck |= (filter & data_zero_mask); // below 32-bit: data
+    zerocheck = ~zerocheck; // invert bits
+
+    header_info[0] = RECORD_SET_HEADER_0(zerocheck, instid, kernid, warpv);
+    if (data == 0) data = -1; // set to non-zero, if thread data is zero
     
 
     //DEBUG_PRINT;
@@ -236,16 +276,7 @@ extern "C" {
 
     //__match_all_sync(active, msb, &pred);
 
-    rec_offset = __shfl_sync(active, rec_offset, lowest);    
-
-    uint64_t header_info[RECORD_HEADER_UNIT];
-    header_info[0] = RECORD_SET_INIT_IDX_0(0, instid, kernid, warpv) | 1;
-    header_info[1] = RECORD_SET_INIT_IDX_1(ctaid_serial) | 1;
-    header_info[2] = RECORD_SET_INIT_IDX_2(grid) | 1;
-    header_info[3] = RECORD_SET_INIT_IDX_3(warpp, sm) | 1;
-    header_info[4] = RECORD_SET_INIT_IDX_4(clock) | 1;
-    header_info[5] = (is_msb_same ? RECORD_SET_INIT_IDX_5(addr, active) : 0) | 1;
-
+    rec_offset = __shfl_sync(active, rec_offset, lowest);
 
     volatile uint64_t* rec_header = (uint64_t*) (records + rec_offset);
 
@@ -275,8 +306,8 @@ extern "C" {
     // write reqeusted addrs for each lane
     if (is_write) {
       int rec_i = (rec_offset + RECORD_SIZE(write_pos)) % SLOT_SIZE;
-      volatile uint64_t* rec_addr = (uint64_t*) (records + rec_i);
-      *rec_addr = (uint64_t) addr | 1;
+      volatile uint64_t* rec_data = (uint64_t*) (records + rec_i);
+      *rec_data = data;
     }
 
 
