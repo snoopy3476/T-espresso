@@ -127,59 +127,48 @@ extern "C" {
 
 
 
+    // check if msb is the same across all active threads
     
     uint64_t msb = addr & 0xFFFFFFFF00000000;
     uint64_t msb_lowest = __shfl_sync(active, msb, lowest);
     uint64_t msb_delta = msb - msb_lowest;
     uint32_t is_msb_diff = __ballot_sync(active, msb_delta);
     
-    //uint64_t msb_delta = 0;
-    //uint32_t is_msb_diff = 0;//__ballot_sync(active, msb_delta);
-    
-    //int is_msb_same = 1;
-    //uint64_t msb = addr & 0xFFFFFFFF00000000;
-    //int addr_len;
-    //__match_all_sync(active, msb, &addr_len);
 
-    // addr delta mask
     
-
-    //uint64_t addr_delta_prev_prev = addr_prev - addr_prev_prev;
+    
+    // calculate write filter + record size
+    
     uint64_t addr_delta_prev = addr_prev - addr_prev_prev;
     uint64_t addr_delta = addr - addr_prev;
     uint64_t addr_delta_next = addr_next - addr;
-    //int is_delta_changed_prev = (addr_delta_prev_prev != addr_delta_prev);
     uint32_t is_delta_changed = (addr_delta != addr_delta_prev);
-    //int is_write_f1 = is_delta_changed && is_delta_changed_prev;
     uint32_t is_prev_inactive = (~(active << 1) & lanemask);
     uint32_t is_write_rawf = is_delta_changed | is_prev_inactive;
   
     uint32_t filter_raw = __ballot_sync(active, is_write_rawf);
-  
-    //uint32_t is_inactive_prev = active << 1;
-    //uint32_t is_inactive_next = active >> 1;
-    //uint32_t is_prev_set = subfilter_1 << 1;
-    //uint32_t inactive_no_write = 0xFFFFFFFF; //is_inactive_next | is_prev_set;
-    //uint32_t inactive_force_write = ~is_inactive_prev;
-  
-    //uint32_t subfilter_2 = (subfilter_1 | inactive_force_write) & active;
-  
     
     uint32_t filter_raw_prev_lanes = filter_raw << (32-1 - lane);
     uint32_t consec_write = __clz(~filter_raw_prev_lanes);
-    uint32_t is_write = is_msb_diff | (consec_write & 0x1); // if msb is not same, all thread writes
+    // if msb is not same, all thread writes
+    uint32_t is_write = is_msb_diff | (consec_write & 0x1);
   
     uint32_t filter = __ballot_sync(active, is_write);
-  
-  
-    uint32_t filter_prev_lanes = filter & lanemask_prevs;
-    uint8_t write_pos = __popc(filter_prev_lanes);
     uint8_t write_count = __popc(filter);
     uint64_t record_size = RECORD_SIZE(write_count);
 
 
-
     
+
+    // get data write position for the current thread
+    
+    uint32_t filter_prev_lanes = filter & lanemask_prevs;
+    uint8_t write_pos = __popc(filter_prev_lanes);
+
+
+
+
+    // initialize record header + data
 
     uint64_t header_info[RECORD_HEADER_UNIT];
     header_info[0] = 1; // ensure first elem to be non-zero
@@ -215,14 +204,14 @@ extern "C" {
 
     //////////////////////////
     /*
-    uint32_t is_write = 1; //consec_write & 0x1;
+      uint32_t is_write = 1; //consec_write & 0x1;
     
-    uint32_t filter = 0xFFFFFFFF;
+      uint32_t filter = 0xFFFFFFFF;
 
     
-    uint8_t write_pos = lane; //__popc(prev_lanes_write_mask);
-    uint8_t write_count = 32; //__popc(filter);
-    uint64_t record_size = RECORD_SIZE(write_count);
+      uint8_t write_pos = lane; //__popc(prev_lanes_write_mask);
+      uint8_t write_count = 32; //__popc(filter);
+      uint64_t record_size = RECORD_SIZE(write_count);
     */
 
 
@@ -252,15 +241,15 @@ extern "C" {
 
       // write header at lowest lane
       /*
-      record_header_t* rec_header =
+        record_header_t* rec_header =
         (record_header_t*) &(records[rec_offset * RECORD_MAX_SIZE]);
 
-      *rec_header =
+        *rec_header =
         (record_header_t) RECORD_SET_INIT_OPT(0, type, instid, kernid, warpv,
-                                              ctaid_serial,
-                                              grid,
-                                              warpp, sm,
-                                              req_size, clock);
+        ctaid_serial,
+        grid,
+        warpp, sm,
+        req_size, clock);
       */
       //////////////////////////////////////////////
     }
@@ -333,7 +322,7 @@ extern "C" {
         ) {
         *signal_v = commit_raw; // request flush to host
         //printf("%u - %u (%u)\n", flushed_cur, commit_raw, commit_raw - flushed_cur);///////
-      //__threadfence_system();
+        //__threadfence_system();
       }
     }
 
@@ -349,29 +338,29 @@ extern "C" {
   __device__ void ___cuprof_trace_ret(uint32_t* commit, uint32_t* signal,
                                       uint32_t lane) {
 /*
-    return;
+  return;
 
-    uint32_t active;
-    asm volatile ("activemask.b32 %0;" : "=r"(active));
-    uint32_t lowest = __ffs(active)-1;
+  uint32_t active;
+  asm volatile ("activemask.b32 %0;" : "=r"(active));
+  uint32_t lowest = __ffs(active)-1;
 
-    volatile uint32_t* commit_v = commit;
+  volatile uint32_t* commit_v = commit;
 
-    if (lane == lowest) {
-      //__threadfence();
-      //printf("ret\n");//////////////////
-      //uint32_t rec_count = *commit_v;
+  if (lane == lowest) {
+  //__threadfence();
+  //printf("ret\n");//////////////////
+  //uint32_t rec_count = *commit_v;
 
-      // if request not sent at the point of return, then send request
-      //if (rec_count != UINT32_MAX) {
+  // if request not sent at the point of return, then send request
+  //if (rec_count != UINT32_MAX) {
       
-      //atomicMax(signal, *commit_v); /////////////// need to be fixed
-      // Bug possibility: what if signal overflows?
+  //atomicMax(signal, *commit_v); /////////////// need to be fixed
+  // Bug possibility: what if signal overflows?
       
-        //}
-      // guarantee write before return
-      //__threadfence_system();
-    }
+  //}
+  // guarantee write before return
+  //__threadfence_system();
+  }
 */
   }
 
