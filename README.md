@@ -1,6 +1,5 @@
-# CUPROF (CUDA Profiler)
+# T-espresso
 
-This llvm plugin is developed based on [CUDA Memtrace](https://github.com/UniHD-CEG/cuda-memtrace).  
 The plugin instruments CUDA code such that tracing ① all executes/returns (lifetimes) of every thread and ② all memory accesses to global memory by a kernel, on a per-stream basis.
 Traces are stored in a simple run-length encoded binary format, for which we provide an io utils in a header only library.
 

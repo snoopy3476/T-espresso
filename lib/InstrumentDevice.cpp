@@ -235,9 +235,9 @@ namespace cuprof {
       uint8_t kernel_name_len = std::min(kernel_name.length(), (size_t)TRACE_KERNELNAME_MAXLEN);
       
       kernel_header->insts_count = inst_debugdata.size();
-      kernel_header->kernel_name_len = kernel_name_len;
+      kernel_header->kernel_name_len = kernel_name_len; /////////////////////////////
       memcpy(kernel_header->kernel_name, kernel_name.c_str(), kernel_name_len);
-      memcpy(kernel_header->insts, inst_debugdata.data(),
+      memcpy(kernel_header->insts + 1, inst_debugdata.data(),
              sizeof(trace_header_inst_t) * kernel_header->insts_count);
 
       
@@ -618,16 +618,16 @@ namespace cuprof {
       //////////////////////////////////
 
       
-      Value* slot = irb.CreateAnd(cta_i, irb.getInt32(SLOTS_PER_STREAM_IN_A_DEV - 1));
+      Value* slot = irb.CreateAnd(cta_i, irb.getInt32(SLOTS_PER_DEV - 1));
 
       //Value* base_i = irb.CreateMul(slot, ConstantInt::get(i32_ty, CACHELINE));
       //Value* slot_i = irb.CreateMul(irb.CreateZExt(slot, i64_ty),
       //                              ConstantInt::get(i64_ty, RECORDS_PER_SLOT));
-      //slot_i = irb.CreateMul(slot_i, ConstantInt::get(i64_ty, RECORD_MAX_SIZE));
+      //slot_i = irb.CreateMul(slot_i, ConstantInt::get(i64_ty, RECORD_SIZE_MAX));
       
       Value* base_i = irb.CreateMul(slot, ConstantInt::get(i32_ty, CACHELINE));
       Value* slot_i = irb.CreateMul(slot, ConstantInt::get(i32_ty, SLOT_SIZE));
-      //slot_i = irb.CreateMul(slot_i, ConstantInt::get(i32_ty, RECORD_MAX_SIZE));
+      //slot_i = irb.CreateMul(slot_i, ConstantInt::get(i32_ty, RECORD_SIZE_MAX));
 
       Value* allocs_ptr = irb.CreateStructGEP(nullptr, trace_info, 0);
       Value* alloc = irb.CreateLoad(allocs_ptr, "alloc");
@@ -726,15 +726,16 @@ namespace cuprof {
 
     bool appendInstHeader(std::vector<trace_header_inst_t>& inst_headers,
                           Value* target, uint32_t instid, uint32_t inst_type,
-                          uint32_t meta) {
+                          uint64_t inst_meta[TRACE_HEADER_INST_META_SIZE]) {
 
       bool debuginfo_not_found = false;
 
       // target basic info
       trace_header_inst_t inst_header = {};
-      inst_header.instid = instid;
-      inst_header.inst_type = inst_type;
-      inst_header.meta = meta;
+      inst_header.id = instid;
+      inst_header.type = inst_type;
+      for (int i = 0; i < TRACE_HEADER_INST_META_SIZE; i++)
+        inst_header.meta[i] = inst_meta[i];
 
       // target debug info
       // '-g' option needed for debug info!
@@ -747,9 +748,9 @@ namespace cuprof {
         
         inst_header.row = debug->getLine();
         inst_header.col = debug->getColumn();
-        inst_header.inst_filename_len = path_len;
-        inst_header.inst_filename = (char*) path.data();
-        //memcpy(inst_header.inst_filename, path.c_str(), path_len);
+        inst_header.filename_len = path_len;
+        inst_header.filename = path.data();
+        //memcpy(inst_header.filename, path.c_str(), path_len);
       }
       else if (const DISubprogram* debug = isa<Function>(target) ?
                ((Function*)target)->getSubprogram() : nullptr) {
@@ -760,8 +761,8 @@ namespace cuprof {
         
         inst_header.row = debug->getLine();
         inst_header.col = 0;
-        inst_header.inst_filename_len = path_len;
-        inst_header.inst_filename = (char*) path.data();
+        inst_header.filename_len = path_len;
+        inst_header.filename = path.data();
       }
       else {
         debuginfo_not_found = true;
@@ -857,8 +858,11 @@ namespace cuprof {
         PointerType* p_ty = dyn_cast<PointerType>(ptr_operand->getType());
         uint32_t req_size = dat_layout.getTypeStoreSize(p_ty->getElementType());
 
+        uint64_t inst_meta[TRACE_HEADER_INST_META_SIZE] = {};
+        inst_meta[0] = req_size;
+
         debuginfo_not_found = debuginfo_not_found
-          || appendInstHeader(inst_headers, inst, instid++, type_num, req_size);
+          || appendInstHeader(inst_headers, inst, instid++, type_num, inst_meta);
       }
       
 
@@ -902,8 +906,10 @@ namespace cuprof {
       };
       irb.CreateCall(trace_call, trace_call_args);
 
+      uint64_t inst_meta[TRACE_HEADER_INST_META_SIZE] = {};
+        
       debuginfo_not_found = debuginfo_not_found
-        || appendInstHeader(inst_headers, kernel, instid++, RECORD_EXECUTE, 0);
+        || appendInstHeader(inst_headers, kernel, instid++, RECORD_EXECUTE, inst_meta);
 
 
       // trace ret
@@ -947,9 +953,8 @@ namespace cuprof {
         irb.CreateCall(trace_ret_call, trace_ret_call_args);
 
         
-        
         debuginfo_not_found = debuginfo_not_found
-          || appendInstHeader(inst_headers, inst, instid++, RECORD_RETURN, 0);
+          || appendInstHeader(inst_headers, inst, instid++, RECORD_RETURN, inst_meta);
       }
 
 
@@ -987,7 +992,7 @@ namespace cuprof {
         if (kernel_filtering && !isKernelToBeTraced(kernel, args.kernel))
           continue;
 
-
+        
         // kernel instrumentation
       
         std::vector<Instruction*> accesses = collectGlobalMemAccesses(kernel);

@@ -91,9 +91,9 @@ extern "C" {
  */
   __device__ __noinline__ void ___cuprof_trace(uint32_t* alloc, uint32_t* commit,
                                                uint32_t* flushed, uint32_t* signal,
-                                               uint8_t* records, uint64_t addr,
+                                               uint8_t* records, uint64_t data,
                                                uint64_t grid, uint64_t ctaid_serial,
-                                               uint32_t warpv, uint32_t lane,
+                                               uint32_t warpv, uint32_t laneid,
                                                uint32_t instid, uint32_t kernid,
                                                uint32_t sm, uint32_t warpp,
                                                uint8_t to_be_traced) {
@@ -101,60 +101,60 @@ extern "C" {
     if (!to_be_traced)
       return;
 
-    uint64_t clock;
-    asm volatile ("mov.u64 %0, %%clock64;" : "=l"(clock));
+    uint64_t clock = clock64();
 
-    volatile uint32_t* alloc_v = alloc;
-    volatile uint32_t* commit_v = commit;
     volatile uint32_t* flushed_v = flushed;
     volatile uint32_t* signal_v = signal;
     
     uint32_t active = __activemask();
-    uint32_t lowest = __ffs(active)-1;
+    uint32_t laneid_leader = __ffs(active)-1;
     
-    uint64_t addr_prev_prev = __shfl_up_sync(active, addr, 2);
-    uint64_t addr_prev = __shfl_up_sync(active, addr, 1);
-    uint64_t addr_next = __shfl_down_sync(active, addr, 1);
+    uint64_t data_prev_prev = __shfl_up_sync(active, data, 2);
+    uint64_t data_prev = __shfl_up_sync(active, data, 1);
+    uint64_t data_next = __shfl_down_sync(active, data, 1);
 
-    uint32_t lanemask = (0x1 << lane);
+    uint32_t lanemask = (0x1 << laneid);
     uint32_t lanemask_prevs = lanemask - 1;
-    uint32_t rlane_id = __popc(active & lanemask_prevs);
-    uint32_t n_active = __popc(active);
+    uint32_t laneid_among_active = __popc(active & lanemask_prevs);
+    uint32_t active_count = __popc(active);
 
     uint32_t rec_offset;
     uint32_t flushed_cur;
 
+    kernid = 1;
+    if (instid >= RECORD_UNKNOWN)
+      instid = 14;
 
-
+#ifndef CUPROF_ODE_DISABLE
 
     // check if msb is the same across all active threads
     
-    uint64_t msb = addr & 0xFFFFFFFF00000000;
-    uint64_t msb_lowest = __shfl_sync(active, msb, lowest);
-    uint64_t msb_delta = msb - msb_lowest;
-    uint32_t is_msb_diff = __ballot_sync(active, msb_delta);
+    uint64_t msb = data >> 32;
+    uint64_t msb_leader = __shfl_sync(active, msb, laneid_leader);
+    uint64_t msb_delta = msb - msb_leader;
+    uint32_t is_msb_same = !(__ballot_sync(active, msb_delta));
     
 
     
     
-    // calculate write filter + record size
+    // calculate warp writemask + record size
     
-    uint64_t addr_delta_prev = addr_prev - addr_prev_prev;
-    uint64_t addr_delta = addr - addr_prev;
-    uint64_t addr_delta_next = addr_next - addr;
-    uint32_t is_delta_changed = (addr_delta != addr_delta_prev);
+    uint64_t data_delta_prev = data_prev - data_prev_prev;
+    uint64_t data_delta = data - data_prev;
+    uint64_t data_delta_next = data_next - data;
+    uint32_t is_delta_changed = (data_delta != data_delta_prev);
     uint32_t is_prev_inactive = (~(active << 1) & lanemask);
     uint32_t is_write_rawf = is_delta_changed | is_prev_inactive;
   
-    uint32_t filter_raw = __ballot_sync(active, is_write_rawf);
+    uint32_t writemask_raw = __ballot_sync(active, is_write_rawf);
     
-    uint32_t filter_raw_prev_lanes = filter_raw << (32-1 - lane);
-    uint32_t consec_write = __clz(~filter_raw_prev_lanes);
+    uint32_t writemask_raw_prev_lanes = writemask_raw << (32-1 - laneid);
+    uint32_t consec_write = __clz(~writemask_raw_prev_lanes);
     // if msb is not same, all thread writes
-    uint32_t is_write = is_msb_diff | (consec_write & 0x1);
+    uint32_t is_write = (consec_write & 0x1) | (!is_msb_same);
   
-    uint32_t filter = __ballot_sync(active, is_write);
-    uint8_t write_count = __popc(filter);
+    uint32_t writemask = __ballot_sync(active, is_write);
+    uint8_t write_count = __popc(writemask);
     uint64_t record_size = RECORD_SIZE(write_count);
 
 
@@ -162,41 +162,69 @@ extern "C" {
 
     // get data write position for the current thread
     
-    uint32_t filter_prev_lanes = filter & lanemask_prevs;
-    uint8_t write_pos = __popc(filter_prev_lanes);
+    uint32_t writemask_prev_lanes = writemask & lanemask_prevs;
+    uint8_t write_pos = __popc(writemask_prev_lanes);
 
 
 
+#else
 
+    uint64_t msb = data >> 32;
+    uint32_t is_msb_same = 1;
+    uint32_t is_write = 1;
+    uint32_t writemask = active;
+    uint64_t record_size = RECORD_SIZE(active_count);
+    uint8_t write_pos = laneid_among_active;
+    
+#endif
+
+    
     // initialize record header + data
 
     uint64_t header_info[RECORD_HEADER_UNIT];
     header_info[0] = 1; // ensure first elem to be non-zero
-    header_info[1] = RECORD_SET_HEADER_1(active, (is_msb_diff ? 0 : filter)); // if msb is not same, filter == 0
+    header_info[1] = RECORD_SET_HEADER_1(active, (is_msb_same ? writemask : 0)); // if msb is not same, writemask == 0
     header_info[2] = RECORD_SET_HEADER_2(ctaid_serial);
     header_info[3] = RECORD_SET_HEADER_3(grid);
     header_info[4] = RECORD_SET_HEADER_4(warpp, sm);
     header_info[5] = RECORD_SET_HEADER_5(msb, clock);
 
-    uint64_t data = (is_msb_diff ? addr : RECORD_SET_DATA(addr_delta_next, addr));
+    
+#ifndef CUPROF_ODE_DISABLE
+    
+    if (is_msb_same)
+      data = RECORD_SET_DATA(data_delta_next, data);
+    
+#endif
 
 
-    // get zerocheck sequence
-    uint32_t data_zero_mask = __ballot_sync(active, data);
+#ifndef CUPROF_RMSYNC_DISABLE
+    
+    // data part nonzero mask
+    uint64_t nonzero_mask_data = __ballot_sync(active, data);
 
-    uint64_t zerocheck = 0;
+    uint64_t nonzero_mask_header = LLGT_BIT_MASK(RECORD_HEADER_UNIT);
+
+    // header part zero mask
     for (int i = 0; i < RECORD_HEADER_UNIT; i++) {
-      zerocheck <<= 1;
       if (header_info[i] == 0) {
-        header_info[i] = -1; // set to non-zero, if header is
-        zerocheck |= ((uint64_t)1 << 32); // above 32-bit: header
+        header_info[i] = -1; // set to non-zero, if header is zero
+        nonzero_mask_header ^= ((uint64_t)1 << i); // make zero part to bit 0
       }
     }
-    zerocheck |= (filter & data_zero_mask); // below 32-bit: data
-    zerocheck = ~zerocheck; // invert bits
 
-    header_info[0] = RECORD_SET_HEADER_0(zerocheck, instid, kernid, warpv);
+    // header part + data part
+    uint64_t nonzero_mask = nonzero_mask_header |
+      ((writemask & nonzero_mask_data) << RECORD_HEADER_UNIT); // append
+    
+    header_info[0] = RECORD_SET_HEADER_0(nonzero_mask, kernid, instid, warpv);
     if (data == 0) data = -1; // set to non-zero, if thread data is zero
+    ///// need to write non-zero if msb is different
+#else
+    
+    header_info[0] = RECORD_SET_HEADER_0(-1, kernid, instid, warpv);
+
+#endif
     
 
     //DEBUG_PRINT;
@@ -206,123 +234,129 @@ extern "C" {
     /*
       uint32_t is_write = 1; //consec_write & 0x1;
     
-      uint32_t filter = 0xFFFFFFFF;
+      uint32_t writemask = 0xFFFFFFFF;
 
     
       uint8_t write_pos = lane; //__popc(prev_lanes_write_mask);
-      uint8_t write_count = 32; //__popc(filter);
+      uint8_t write_count = 32; //__popc(writemask);
       uint64_t record_size = RECORD_SIZE(write_count);
     */
 
 
     // allocate space in slot
-    if (lane == lowest) {
+    if (laneid == laneid_leader) {
 
       // get the allocated offset
-      uint32_t alloc_raw = atomicAdd(alloc, record_size); //atomicInc(alloc, UINT32_MAX);
+      uint32_t alloc_raw = atomicAdd(alloc, record_size);
+      
       rec_offset = alloc_raw % SLOT_SIZE;
-      //rec_offset = alloc_raw & (RECORDS_PER_SLOT-1);
 
       // wait until slot is not full
       do {
         flushed_cur = *flushed_v;
-      } while ((alloc_raw - flushed_cur) >= SLOT_SIZE - RECORD_MAX_SIZE);
-
-
-      //volatile uint64_t* rec_header = (uint64_t*) &(records[rec_offset]);
-      //for (int i = 0; i < write_count + RECORD_HEADER_UNIT; i++)
-      //  while (rec_header[0]);
-      //printf("%u\n", rec_offset);
-
-      // map alloc to physical buf
-      //rec_offset = alloc_raw - flushed_now;
-
-      ////////// WRITE DISTRIBUTION (OFF) //////////
-
-      // write header at lowest lane
-      /*
-        record_header_t* rec_header =
-        (record_header_t*) &(records[rec_offset * RECORD_MAX_SIZE]);
-
-        *rec_header =
-        (record_header_t) RECORD_SET_INIT_OPT(0, type, instid, kernid, warpv,
-        ctaid_serial,
-        grid,
-        warpp, sm,
-        req_size, clock);
-      */
-      //////////////////////////////////////////////
+      } while ((alloc_raw - flushed_cur) >= SLOT_SIZE - RECORD_SIZE_MAX);
     }
 
-    //uint64_t msb = addr & 0xFFFFFFFF00000000;
-    //int addr_len;
-    //__match_all_sync(active, msb, &addr_len);
-    
 
-    ////////// WRITE DISTRIBUTION (ON) //////////
 
-    // write header
+    rec_offset = __shfl_sync(active, rec_offset, laneid_leader);
 
-    //__match_all_sync(active, msb, &pred);
-
-    rec_offset = __shfl_sync(active, rec_offset, lowest);
+#ifndef CUPROF_CRW_DISABLE
 
     volatile uint64_t* rec_header = (uint64_t*) (records + rec_offset);
 
-    for (int i = rlane_id; i < RECORD_HEADER_UNIT; i += n_active) {
+    for (int i = laneid_among_active; i < RECORD_HEADER_UNIT; i += active_count) {
       int rec_i = (rec_offset + sizeof(uint64_t)*i) % SLOT_SIZE;
       *(uint64_t*)(records + rec_i) = header_info[i];
     }
-
     //////////////////////////////////////////////
 
+#else
 
     
+    if (laneid == laneid_leader) {
+      for (int i = 0; i < RECORD_HEADER_UNIT; i++) {
+        int rec_i = (rec_offset + sizeof(uint64_t)*i) % SLOT_SIZE;
+        *(uint64_t*)(records + rec_i) = header_info[i];
+      }
+    }
+
+#endif
 
 
 
 
 
 
-    /////////////////////////////////////////////
+#ifndef CUPROF_CRW_DISABLE
 
-
-    //uint32_t filter_final = active;
-
-    //uint32_t write_pos = lane;
-    //uint32_t is_write = 1;
-    
-    // write reqeusted addrs for each lane
     if (is_write) {
       int rec_i = (rec_offset + RECORD_SIZE(write_pos)) % SLOT_SIZE;
       volatile uint64_t* rec_data = (uint64_t*) (records + rec_i);
       *rec_data = data;
     }
 
+#else
 
+    uint64_t data_warp[32];
+    uint32_t data_count = 0;
+
+    for (int i = 0; i < 32; i++) {
+
+      uint32_t mask = (0x1 << i);
+      if (mask & writemask) {
+        data_warp[data_count] = __shfl_sync(active, data, i);
+        if (data_warp[data_count] == 0)
+          data_warp[data_count] = -1;
+        data_count++;
+      }
+
+    }
+
+    if (laneid == laneid_leader) {
+      for (int i = 0; i < data_count; i++) {
+        
+        int rec_i = (rec_offset + RECORD_SIZE(i)) % SLOT_SIZE;
+        volatile uint64_t* rec_data = (uint64_t*) (records + rec_i);
+        *rec_data = data_warp[i];
+      }
+        
+
+    }
+    
+#endif
+    
+
+
+#ifdef CUPROF_RMSYNC_DISABLE
 
     // guarantee all writes before to be written to the 'records'
-    //__threadfence_system();
+    __threadfence_system();
+    
+#endif
 
     // commit space in slot, and send full signal to the host
-    if (lane == lowest) {
-      //uint32_t write_count = __popc(filter_final);
+    if (laneid == laneid_leader) {
+      //uint32_t write_count = __popc(writemask_final);
       //if (write_count != 32)
-      //printf("write_count = %u\n%x\n%x\n%u\n%u\n%u\n\n%x\n%x\n%x)\n", write_count, addr_prev, addr_next, addr_delta_prev, addr_delta_next, is_delta_changed, subfilter_1, subfilter_2, filter);//////////////////
+      //printf("write_count = %u\n%x\n%x\n%u\n%u\n%u\n\n%x\n%x\n%x)\n", write_count, data_prev, data_next, data_delta_prev, data_delta_next, is_delta_changed, subwritemask_1, subwritemask_2, writemask);//////////////////
       uint32_t commit_raw = atomicAdd(commit, record_size) + record_size; //atomicInc(commit, UINT32_MAX) + 1;
       
       
-      //if (commit_raw - flushed_cur >= SLOT_SIZE - RECORD_MAX_SIZE) { //(commit_raw & ((RECORDS_PER_SLOT-1))) == 0) {
-      uint32_t flush_unit = UNIT_SLOT_SIZE - RECORD_MAX_SIZE;
-      uint32_t flush_threshold = UNIT_SLOT_SIZE - (2*RECORD_MAX_SIZE);
+
+#ifndef CUPROF_MULTI_BUF_DISABLE
+      uint32_t flush_unit = UNIT_SLOT_SIZE - RECORD_SIZE_MAX;
+      uint32_t flush_threshold = UNIT_SLOT_SIZE - (2*RECORD_SIZE_MAX);
+#else
+      uint32_t flush_unit = SLOT_SIZE - RECORD_SIZE_MAX;
+      uint32_t flush_threshold = SLOT_SIZE - (2*RECORD_SIZE_MAX);
+#endif
       if (
         ( ((commit_raw - flushed_cur - record_size) % flush_unit) >= flush_threshold )
         &&
         ( (commit_raw - flushed_cur) % flush_unit < flush_threshold )
         ) {
         *signal_v = commit_raw; // request flush to host
-        //printf("%u - %u (%u)\n", flushed_cur, commit_raw, commit_raw - flushed_cur);///////
-        //__threadfence_system();
       }
     }
 

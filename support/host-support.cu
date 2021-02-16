@@ -187,39 +187,39 @@ public:
     
     // allocate and initialize traceinfo of the host
     cudaChecked(cudaMalloc(&traceinfo.info_d.allocs_d,
-                           SLOTS_PER_STREAM_IN_A_DEV * CACHELINE));
+                           SLOTS_PER_DEV * CACHELINE));
     cudaChecked(cudaMemsetAsync(traceinfo.info_d.allocs_d, 0,
-                                SLOTS_PER_STREAM_IN_A_DEV * CACHELINE,
+                                SLOTS_PER_DEV * CACHELINE,
                                 cudastream_trace));
     
     cudaChecked(cudaMalloc(&traceinfo.info_d.commits_d,
-                           SLOTS_PER_STREAM_IN_A_DEV * CACHELINE));
+                           SLOTS_PER_DEV * CACHELINE));
     cudaChecked(cudaMemsetAsync(traceinfo.info_d.commits_d, 0,
-                                SLOTS_PER_STREAM_IN_A_DEV * CACHELINE,
+                                SLOTS_PER_DEV * CACHELINE,
                                 cudastream_trace));
     /*
     cudaChecked(cudaMallocManaged(&traceinfo.flusheds_h,
-                                  SLOTS_PER_STREAM_IN_A_DEV * CACHELINE));
+                                  SLOTS_PER_DEV * CACHELINE));
     traceinfo.info_d.flusheds_d = traceinfo.flusheds_h;
     cudaChecked(cudaMemsetAsync(traceinfo.info_d.flusheds_d, 0,
-                                SLOTS_PER_STREAM_IN_A_DEV * CACHELINE,
+                                SLOTS_PER_DEV * CACHELINE,
                                 cudastream_trace));
     */
     /*
     cudaChecked(cudaHostAlloc(&traceinfo.flusheds_h,
-                              SLOTS_PER_STREAM_IN_A_DEV * CACHELINE,
+                              SLOTS_PER_DEV * CACHELINE,
                               cudaHostAllocMapped));
     cudaChecked(cudaHostGetDevicePointer(&traceinfo.info_d.flusheds_d,
                                          traceinfo.flusheds_h, 0));
     memset(traceinfo.flusheds_h, 0,
-           SLOTS_PER_STREAM_IN_A_DEV * CACHELINE);
+           SLOTS_PER_DEV * CACHELINE);
     */
     
       
     cudaChecked(cudaMalloc(&traceinfo.info_d.flusheds_d,
-                           SLOTS_PER_STREAM_IN_A_DEV * CACHELINE));
+                           SLOTS_PER_DEV * CACHELINE));
     cudaChecked(cudaMemsetAsync(traceinfo.info_d.flusheds_d, 0,
-                                SLOTS_PER_STREAM_IN_A_DEV * CACHELINE,
+                                SLOTS_PER_DEV * CACHELINE,
                                 cudastream_trace));
     traceinfo.flusheds_h = traceinfo.info_d.flusheds_d;
     //printf("%p\n", traceinfo.info_d.flusheds_d);
@@ -229,40 +229,40 @@ public:
     
 
     traceinfo.flusheds_old =
-      (uint8_t*) malloc(SLOTS_PER_STREAM_IN_A_DEV * CACHELINE);
+      (uint8_t*) malloc(SLOTS_PER_DEV * CACHELINE);
     always_assert(traceinfo.flusheds_old);
-    memset(traceinfo.flusheds_old, 0, SLOTS_PER_STREAM_IN_A_DEV * CACHELINE);
+    memset(traceinfo.flusheds_old, 0, SLOTS_PER_DEV * CACHELINE);
 
     cudaChecked(cudaHostAlloc(&traceinfo.signals_h,
-                              SLOTS_PER_STREAM_IN_A_DEV * CACHELINE,
+                              SLOTS_PER_DEV * CACHELINE,
                               cudaHostAllocMapped));
     cudaChecked(cudaHostGetDevicePointer(&traceinfo.info_d.signals_d,
                                          traceinfo.signals_h, 0));
     memset(traceinfo.signals_h, 0,
-           SLOTS_PER_STREAM_IN_A_DEV * CACHELINE);
+           SLOTS_PER_DEV * CACHELINE);
 
 
 #ifndef CUPROF_RECBUF_MANAGED
 
     cudaChecked(cudaHostAlloc(&traceinfo.records_h,
-                              SLOTS_PER_STREAM_IN_A_DEV
+                              SLOTS_PER_DEV
                               * SLOT_SIZE,
                               cudaHostAllocMapped));
     cudaChecked(cudaHostGetDevicePointer(&traceinfo.info_d.records_d,
                                          traceinfo.records_h,
                                          0));
     memset(traceinfo.records_h, 0,
-           SLOTS_PER_STREAM_IN_A_DEV * SLOT_SIZE);
+           SLOTS_PER_DEV * SLOT_SIZE);
 
     
 #else
 
     cudaChecked(cudaMallocManaged(&traceinfo.records_h,
-                                  SLOTS_PER_STREAM_IN_A_DEV
+                                  SLOTS_PER_DEV
                                   * SLOT_SIZE));
     traceinfo.info_d.records_d = traceinfo.records_h;
     cudaChecked(cudaMemsetAsync(traceinfo.info_d.records_d, 0,
-                                SLOTS_PER_STREAM_IN_A_DEV * SLOT_SIZE,
+                                SLOTS_PER_DEV * SLOT_SIZE,
                                 cudastream_trace));
     
 #endif
@@ -476,11 +476,13 @@ protected:
     // flush
     
     // flush for area 1
+#ifndef CUPROF_RMSYNC_DISABLE
     for (int i = area[0][0]/sizeof(uint64_t);
          i < (area[0][0] + area[0][1])/sizeof(uint64_t);
          i++) {
       while ( !records_h_lu[i] );
     }
+#endif
     
     if (! tracefile_write(out, records_h + area[0][0], area[0][1])) {
       fprintf(stderr, "Trace Write Error!\n");
@@ -492,12 +494,14 @@ protected:
 
     // flush for area 2
     if (area[1][1] != 0) {
-      
+
+#ifndef CUPROF_RMSYNC_DISABLE
       for (int i = area[1][0]/sizeof(uint64_t);
            i < (area[1][0] + area[1][1])/sizeof(uint64_t);
            i++) {
         while ( !records_h_lu[i] );
       }
+#endif
     
       if (! tracefile_write(out, records_h + area[1][0], area[1][1])) {
         fprintf(stderr, "Trace Write Error!\n");
@@ -554,10 +558,10 @@ protected:
     }
     */
     
-    uint32_t offset[SLOTS_PER_STREAM_IN_A_DEV];
-    uint32_t records_offset[SLOTS_PER_STREAM_IN_A_DEV];
+    uint32_t offset[SLOTS_PER_DEV];
+    uint32_t records_offset[SLOTS_PER_DEV];
 
-    for(int slot = 0; slot < SLOTS_PER_STREAM_IN_A_DEV; slot++) {
+    for(int slot = 0; slot < SLOTS_PER_DEV; slot++) {
       offset[slot] = slot * CACHELINE;
       records_offset[slot] = slot * SLOT_SIZE;
     }
@@ -565,7 +569,7 @@ protected:
     //while (!obj->to_be_terminated) {
       
     while(obj->should_run) {
-      for(int slot = 0; slot < SLOTS_PER_STREAM_IN_A_DEV; slot++) {
+      for(int slot = 0; slot < SLOTS_PER_DEV; slot++) {
         consumeSlot(&allocs_d[offset[slot]], &commits_d[offset[slot]],
                     &signals_h[offset[slot]], &flusheds_h[offset[slot]],
                     &flusheds_old[offset[slot]], &records_d[records_offset[slot]],
@@ -577,7 +581,7 @@ protected:
 
     // after should_run flag has been reset to false, no warps are writing, but
     // there might still be data in the buffers
-    for(int slot = 0; slot < SLOTS_PER_STREAM_IN_A_DEV; slot++) {
+    for(int slot = 0; slot < SLOTS_PER_DEV; slot++) {
       consumeSlot(&allocs_d[offset[slot]], &commits_d[offset[slot]],
                   &signals_h[offset[slot]], &flusheds_h[offset[slot]],
                   &flusheds_old[offset[slot]], &records_d[records_offset[slot]],

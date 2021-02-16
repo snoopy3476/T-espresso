@@ -31,7 +31,7 @@ extern "C" {
 #define NAME_UNKNOWN "(unknown)"
   
   static const char TRACE_HEADER_PREFIX[] = "__CUPROF_TRACE__";
-  static const char TRACE_HEADER_POSTFIX[] = "\0\0\0\0";
+  static const char TRACE_HEADER_POSTFIX[] = "__CUPROF_TRACE__END__";
   static const char* trace_last_error = NULL;
 
 
@@ -53,6 +53,8 @@ extern "C" {
   
 #define TRACEFILE_BUF_SIZE (SLOT_SIZE * 4)
 #define TRACE_HEADER_BUF_SIZE_UNIT (1024 * 1024)
+
+#define TRACE_HEADER_INST_META_SIZE 5
   
   
   typedef struct {
@@ -72,14 +74,23 @@ extern "C" {
   } cta_t;
   
   typedef struct {
-    uint32_t instid;
-    uint32_t inst_type;
-    uint32_t meta;
+    uint32_t id;
+    uint32_t type;
+    uint64_t meta[TRACE_HEADER_INST_META_SIZE];
     uint32_t row;
     uint32_t col;
-    uint32_t inst_filename_len;
-    char* inst_filename;
+    uint32_t filename_len;
+    const char* filename;
   } trace_header_inst_t;
+  
+  static trace_header_inst_t empty_inst = {
+    0,
+    RECORD_UNKNOWN,
+    {0},
+    0,
+    0,
+    sizeof(NAME_UNKNOWN)+1
+  };
 
   typedef struct {
     uint32_t insts_count;
@@ -90,35 +101,34 @@ extern "C" {
   } trace_header_kernel_t;
 
   static trace_header_kernel_t empty_kernel = {
-    0, sizeof(NAME_UNKNOWN)+1, NAME_UNKNOWN, {{0}}
+    0,
+    sizeof(NAME_UNKNOWN)+1,
+    NAME_UNKNOWN,
+    {{0}}
   };
   
 
-  typedef struct {
-    uint64_t addr;
-    int32_t offset;
-    int8_t count;
-  } trace_record_addr_t;
     
   typedef struct {
+  
+    const trace_header_kernel_t* kernel_info;
+    const trace_header_inst_t* inst_info;
+    uint32_t warpv;
+    
+    uint32_t activemask;
+    uint32_t writemask;
     
     cta_t ctaid;
-    uint64_t clock;
+    
     uint64_t grid;
-  
-    uint32_t type;
-    uint32_t sm;
+    
     uint32_t warpp;
-    uint32_t instid;
-    uint32_t kernid;
+    uint32_t sm;
+    
     uint32_t msb;
-    uint32_t active;
-    uint32_t meta;
-  
-    uint8_t warpv;
-    uint8_t addr_len;
-  
-    trace_record_addr_t addr_unit[1]; // managed as flexible length member
+    uint32_t clock;
+
+    uint64_t thread_data[RECORD_DATA_UNIT_MAX];
   } trace_record_t;
 
   typedef struct {
@@ -134,8 +144,6 @@ extern "C" {
   } trace_t;
 
   
-#define TRACE_RECORD_SIZE(addr_len)                                     \
-  (sizeof(trace_record_t) + sizeof(trace_record_addr_t) * (addr_len - 1))
 #define CONST_MAX(x, y) ((x) > (y) ? (x) : (y))
 #include <errno.h> ///////////////////////////////////////////
   
@@ -252,24 +260,28 @@ static inline double rttclock()
  * reader *
  **********/
 
-  static size_t int_serialize(byte* buf, size_t size_byte, uint32_t input) {
-    
-    for (size_t i = 0; i < size_byte; i++) {
-      buf[i] = (uint8_t) (input >> (i * 8)) & 0xFF;
+  static void uint64_serialize(byte* buf, size_t* offset, uint64_t input) {
+
+    size_t offset_val = 0;
+
+    if (offset != NULL) {
+      offset_val = *offset;
+      *offset += sizeof(uint64_t);
     }
     
-    return size_byte;
+    *(uint64_t*)(buf + offset_val) = input;
   }
   
-  static size_t int_deserialize(uint32_t* output, size_t size_byte, byte* buf) {
-    
-    uint32_t value = 0;
-    for (size_t i = 0; i < size_byte; i++) {
-      value += ((uint32_t)buf[i] & 0xFF) << (i * 8);
+  static uint64_t uint64_deserialize(byte* buf, size_t* offset) {
+
+    size_t offset_val = 0;
+
+    if (offset != NULL) {
+      offset_val = *offset;
+      *offset += sizeof(uint64_t);
     }
-    *output = value;
     
-    return size_byte;
+    return *(uint64_t*)(buf + offset_val);
   }
   
 
@@ -289,14 +301,13 @@ static inline double rttclock()
       return NULL;
     }
     
-    size_t offset = 4; // write with padding for the header size field
+    size_t offset = 0; // write with padding for the header size field
 
-    // kernel info
-    //offset += int_serialize(buf + offset, 4, (uint32_t)-1); // kernel header size
-    offset += int_serialize(buf + offset, 4, kernel_header->insts_count); // inst count
-    offset += int_serialize(buf + offset, TRACE_KERNELNAME_MAXLEN_BYTES,
-                            MIN(TRACE_KERNELNAME_MAXLEN,
-                                kernel_header->kernel_name_len)); // kernel name len
+    // inst count
+    uint64_serialize(buf, &offset, kernel_header->insts_count);
+
+    // kernel name length
+    uint64_serialize(buf, &offset, kernel_header->kernel_name_len);
     
     memcpy(buf + offset,
            kernel_header->kernel_name,
@@ -305,7 +316,7 @@ static inline double rttclock()
 
     
     // inst info
-    for (uint32_t i = 0; i < kernel_header->insts_count; i++) {
+    for (uint32_t i = 1; i <= kernel_header->insts_count; i++) {
 
       // realloc if overflow (worst case)
       if (offset > buf_size - (sizeof(trace_header_inst_t)+TRACE_FILENAME_MAXLEN)) {
@@ -320,22 +331,34 @@ static inline double rttclock()
 
       
       trace_header_inst_t* inst_header = &kernel_header->insts[i];
+
+      // inst id in kernel
+      uint64_serialize(buf, &offset, inst_header->id);
       
-      offset += int_serialize(buf + offset, TRACE_FILENAME_MAXLEN_BYTES,
-                              inst_header->inst_filename_len); // inst filename length
-      offset += int_serialize(buf + offset, 4, inst_header->instid); // inst id
-      offset += int_serialize(buf + offset, 4, inst_header->row); // inst row
-      offset += int_serialize(buf + offset, 4, inst_header->col); // inst col
+      // inst type
+      uint64_serialize(buf, &offset, inst_header->type);
+
+      for (int meta_i = 0; meta_i < TRACE_HEADER_INST_META_SIZE; meta_i++)
+        uint64_serialize(buf, &offset, inst_header->meta[i]);
+      
+      // inst row in file
+      uint64_serialize(buf, &offset, inst_header->row);
+      
+      // inst col in file
+      uint64_serialize(buf, &offset, inst_header->col);
+      
+      // inst filename length
+      uint64_serialize(buf, &offset, inst_header->filename_len);
       
       memcpy(buf + offset,
-             inst_header->inst_filename,
-             inst_header->inst_filename_len); // inst filename
-      offset += inst_header->inst_filename_len;
+             inst_header->filename,
+             inst_header->filename_len); // inst filename
+      offset += inst_header->filename_len;
 
     }
     
     
-    int_serialize(buf, 4, (uint32_t)offset); // kernel header size to the front
+    //int_serialize(buf, 4, (uint32_t)offset); // kernel header size to the front
     *out_size = offset;
     
     
@@ -350,69 +373,71 @@ static inline double rttclock()
   }
 
 
-  static size_t get_kernel_header_bytes_after_deserialize(byte* buf) {
-    uint32_t count;
-    int_deserialize(&count, 4, buf + 5); // inst count
-    return sizeof(trace_header_kernel_t) + (sizeof(trace_header_inst_t) * (count));
-  }
-
   static size_t header_deserialize(trace_header_kernel_t* kernel_header,
-                                   byte* serial_data) {
+                                   byte* buf) {
     
-    if (!kernel_header || !serial_data) {
+    if (!kernel_header || !buf) {
       return 0;
     }
 
+    printf("\nKERNEL\n");//////////
 
     size_t offset = 0;
 
-    // kernel info
-    
-    // kernel placeholder
-    //uint32_t value = 0;
-    //offset += int_deserialize(&value, 4, serial_data + offset);
+    // kernel info //
     
     // inst count
-    offset += int_deserialize(&kernel_header->insts_count, 4,
-                              serial_data + offset);
+    kernel_header->insts_count = uint64_deserialize(buf, &offset);
+    
     // kernel name length
-    offset += int_deserialize(&kernel_header->kernel_name_len,
-                              TRACE_KERNELNAME_MAXLEN_BYTES,
-                              serial_data + offset);
+    kernel_header->kernel_name_len = uint64_deserialize(buf, &offset);
     kernel_header->kernel_name_len = MIN(TRACE_KERNELNAME_MAXLEN,
                                          kernel_header->kernel_name_len);
     //////////////////////// remove std::min in InstrumentDevice.cpp /////////////
     
     memcpy(kernel_header->kernel_name,
-           serial_data + offset,
+           buf + offset,
            kernel_header->kernel_name_len); // kernel name
     offset += kernel_header->kernel_name_len;
+    //printf("kernel_name: %s\n", kernel_header->kernel_name);
       
     
     // inst info
     for (uint32_t i = 1; i <= kernel_header->insts_count; i++) {
       trace_header_inst_t* inst_header = &kernel_header->insts[i];
 
-      // inst filename length
-      inst_header->inst_filename_len = serial_data[offset++];
       // inst id in kernel
-      offset += int_deserialize(&inst_header->instid, 4, serial_data + offset);
-      // inst row in file
-      offset += int_deserialize(&inst_header->row, 4, serial_data + offset);
-      // inst col in file
-      offset += int_deserialize(&inst_header->col, 4, serial_data + offset);
+      inst_header->id = uint64_deserialize(buf, &offset);
       
-      inst_header->inst_filename =
-        (char*) malloc(sizeof(inst_header->inst_filename_len));
-      memcpy(inst_header->inst_filename,
-             serial_data + offset,
-             inst_header->inst_filename_len); // inst filename
-      offset += inst_header->inst_filename_len;
-      printf("%u, %u\n", i, inst_header->instid);
-      if (i+1 != inst_header->instid) {
+      // inst type in kernel
+      inst_header->type = uint64_deserialize(buf, &offset);
+      
+      // metadata for inst
+      for (int meta_i = 0; meta_i < TRACE_HEADER_INST_META_SIZE; meta_i++)
+        inst_header->meta[i] = uint64_deserialize(buf, &offset);
+      
+      // inst row in file
+      inst_header->row = uint64_deserialize(buf, &offset);
+      
+      // inst col in file
+      inst_header->col = uint64_deserialize(buf, &offset);
+      
+      // inst filename length
+      inst_header->filename_len = uint64_deserialize(buf, &offset);
+      
+      char* filename = 
+        (char*) malloc(sizeof(inst_header->filename_len));
+      inst_header->filename = filename;
+      memcpy(filename,
+             buf + offset,
+             inst_header->filename_len); // inst filename
+      offset += inst_header->filename_len;
+      if (i != inst_header->id) {
         trace_last_error = "failed to deserialize kernel header";
         return 0;
       }
+
+      printf("\ninstid: %u\n", i);//////////
     }
 
     return offset;
@@ -422,43 +447,108 @@ static inline double rttclock()
 
 
 
-//  static void trace_serialize(trace_record_t* record, record_t* buf) {
-//  }
+  static void trace_deserialize(uint8_t* record_serialized, trace_t* trace,
+                                uint32_t data_count) {
+    
+    trace_record_t* record = &trace->record;
+    uint64_t nonzero_mask = RECORD_GET_NONZEROMASK(record_serialized);
+    uint8_t is_msb_diff = 0;
 
-  static void trace_deserialize(record_t* buf, trace_record_t* record) {
-    record->addr_len = RECORD_GET_ALEN(buf);
-    record->kernid = RECORD_GET_KERNID(buf);
-    record->instid = RECORD_GET_INSTID(buf);
-    record->warpv = RECORD_GET_WARP_V(buf);
-  
-    record->ctaid.x = RECORD_GET_CTAX(buf);
-    record->ctaid.y = RECORD_GET_CTAY(buf);
-    record->ctaid.z = RECORD_GET_CTAZ(buf);
     
-    record->grid = RECORD_GET_GRID(buf);
+    // recover header data before non-zero conversion //
     
-    record->warpp = RECORD_GET_WARP_P(buf);
-    record->sm = RECORD_GET_SM(buf);
-    
-    record->clock = RECORD_GET_CLOCK(buf);
+    uint64_t* buf_header = (uint64_t*) (record_serialized);
+    uint64_t nonzero_mask_header =
+      LLGT_GET_BITFIELD(nonzero_mask, 0, RECORD_HEADER_UNIT);
 
-    record->msb = RECORD_GET_MSB(buf);
-    record->active = RECORD_GET_ACTIVE(buf);
+    for (int i = 0; i < RECORD_HEADER_UNIT; i++)
+      if ((nonzero_mask_header & ((uint64_t)1 << i)) == 0)
+        buf_header[i] = 0; // recover header
+
     
 
-    if (record->addr_len > 0) {
-      for (uint8_t i = 0; i < record->addr_len; i++) {
-        record->addr_unit[i].addr = RECORD_ADDR(buf, i);
-        record->addr_unit[i].offset = RECORD_GET_OFFSET(buf, i);
-        record->addr_unit[i].count = RECORD_GET_COUNT(buf, i);
+    // deserialize header //
+    
+    uint64_t kernid = RECORD_GET_KERNID(record_serialized);
+    record->kernel_info = (kernid < trace->kernel_count) ?
+      trace->kernel_accdat[kernid] :
+      &empty_kernel;
+    uint64_t instid = RECORD_GET_INSTID(record_serialized);
+    record->inst_info = (instid < record->kernel_info->insts_count) ?
+      &record->kernel_info->insts[instid] :
+      &empty_inst;
+    record->warpv = RECORD_GET_WARP_V(record_serialized);
+    
+    record->activemask = RECORD_GET_ACTIVEMASK(record_serialized);
+    record->writemask = RECORD_GET_WRITEMASK(record_serialized);
+    if (record->writemask == 0) {
+      record->writemask = record->activemask;
+      is_msb_diff = 1; // writemask 0 means msb was different
+    }
+    
+    record->ctaid.x = RECORD_GET_CTAX(record_serialized);
+    record->ctaid.y = RECORD_GET_CTAY(record_serialized);
+    record->ctaid.z = RECORD_GET_CTAZ(record_serialized);
+    
+    record->grid = RECORD_GET_GRID(record_serialized);
+    
+    record->warpp = RECORD_GET_WARP_P(record_serialized);
+    record->sm = RECORD_GET_SM(record_serialized);
+    
+    record->msb = RECORD_GET_MSB(record_serialized);
+    record->clock = RECORD_GET_CLOCK(record_serialized);
+
+
+    
+    // recover thread data before non-zero conversion //
+    
+    uint64_t* buf_data = (uint64_t*) (record_serialized + RECORD_HEADER_SIZE);
+    uint64_t nonzero_mask_data = 
+      LLGT_GET_BITFIELD(nonzero_mask, RECORD_HEADER_UNIT, RECORD_DATA_UNIT_MAX);
+    
+    int record_serialized_i = 0;
+    for (int record_i = 0; record_i < RECORD_DATA_UNIT_MAX; record_i++)
+      if (record->writemask & (~nonzero_mask_data) & (LLGT_SET_BITFIELD(1, record_i, 1)))
+        buf_data[record_serialized_i++] = 0; // recover zero data
+    
+
+    
+    // deserialize data //
+    
+    if (!is_msb_diff) {
+      record_serialized_i = 0;
+      uint64_t delta = 0;
+      uint64_t data = 0;
+      
+      
+      for (int record_i = 0; record_i < RECORD_DATA_UNIT_MAX; record_i++) {
+          
+        if (record->writemask & (LLGT_SET_BITFIELD(1, record_i, 1))) {
+          delta = RECORD_GET_DELTA(record_serialized, record_serialized_i);
+          data = RECORD_GET_DATA(record_serialized, record_serialized_i);
+          record_serialized_i++;
+        }
+
+
+        // write record_i-th thread data
+        if (record->activemask & (LLGT_SET_BITFIELD(1, record_i, 1))) {
+          record->thread_data[record_i] = 
+            (LLGT_SET_BITFIELD(record->msb, 32, 32) |   \
+             (LLGT_SET_BITFIELD(data, 0, 32)));
+        }
+        else {
+          record->thread_data[record_i] = 0;
+        }
+
+        
+        data += delta;
       }
     }
     else {
-      record->addr_len = 32;
-      for (uint8_t i = 0; i < record->addr_len; i++) {
-        record->addr_unit[i].addr = RECORD_ADDR(buf, i);
-        record->addr_unit[i].offset = 0;
-        record->addr_unit[i].count = 1;
+      for (int i = 0; i < RECORD_DATA_UNIT_MAX; i++) {
+        record->thread_data[i] =
+          (RECORD_GET_DELTA(record, i) << 32) |
+          (RECORD_GET_DATA(record, i));
       }
     }
   }
@@ -466,12 +556,12 @@ static inline double rttclock()
 
   
   static trace_t* trace_open(const char* filename) {
-    int debug_count = 0;
-    printf("%d\n", debug_count++);//////////////////
+    //int debug_count = 0;
+    //printf("%d\n", debug_count++);//////////////////
     tracefile_t input_file;
     input_file = tracefile_open(filename, TRACEFILE_READ);
     
-    printf("%d\n", debug_count++);//////////////////
+    //printf("%d\n", debug_count++);//////////////////
     
     byte delim_buf[CONST_MAX(sizeof(TRACE_HEADER_PREFIX),
                              sizeof(TRACE_HEADER_POSTFIX) + 5)];
@@ -484,18 +574,16 @@ static inline double rttclock()
       return NULL;
     }
 
-    printf("%d\n", debug_count++);//////////////////
+    //printf("%d\n", debug_count++);//////////////////
     
     // get trace header length
-    uint32_t accdat_len;
-    if (! tracefile_read(input_file, delim_buf, sizeof(uint32_t))) {
+    uint64_t accdat_len;
+    if (! tracefile_read(input_file, &accdat_len, sizeof(accdat_len))) {
       trace_last_error = "failed to read trace header length";
       return NULL;
     }
-    int_deserialize(&accdat_len, 4, delim_buf);
 
-
-    printf("%d\n", debug_count++);//////////////////
+    //printf("%d\n", debug_count++);//////////////////
     
     // read access data part from header
     byte* accdat = (byte*) malloc(accdat_len);
@@ -504,40 +592,44 @@ static inline double rttclock()
       return NULL;
     }
 
-    printf("%d\n", debug_count++);//////////////////
+    //printf("%d\n", debug_count++);//////////////////
     
     if (! tracefile_read(input_file, accdat, accdat_len)) {
       trace_last_error = "failed to read trace header";
       return NULL;
     }
 
-    printf("%d\n", debug_count++);//////////////////
+    //printf("%d\n", debug_count++);//////////////////
     
     // allocate trace_t
-    trace_t* res = (trace_t*) malloc(offsetof(trace_t, record) + TRACE_RECORD_SIZE(32));
-    res->kernel_accdat = (trace_header_kernel_t**) malloc(sizeof(trace_header_kernel_t*) * 256);
+    trace_t* res = (trace_t*) malloc(sizeof(trace_t));
+    res->kernel_accdat = (trace_header_kernel_t**) malloc(sizeof(trace_header_kernel_t*) * (0x3FF + 1)); //////////// 
 
     
-    printf("%d\n", debug_count++);//////////////////
+    //printf("%d\n", debug_count++);//////////////////
     
     // build memory access data for each kernels
     uint64_t kernel_count = 0;
 
     res->kernel_accdat[0] = &empty_kernel;
     
-    printf("%d\n", debug_count++);//////////////////
+    //printf("%d\n", debug_count++);//////////////////
     
     for (uint32_t offset = 0; offset < accdat_len; kernel_count++) {
       
-      printf("\t%d\n", debug_count++);//////////////////
+      //printf("\t%d\n", debug_count++);//////////////////
+
       
-      size_t kernel_header_size = get_kernel_header_bytes_after_deserialize(accdat + offset);
+      size_t kernel_header_size = sizeof(trace_header_kernel_t) +
+        sizeof(trace_header_inst_t) * uint64_deserialize(accdat, NULL);
       
-      printf("\t%d\n", debug_count++);//////////////////
+      //printf("kernel_header_size: %u\n", kernel_header_size);///////////////
+      //printf("\t%d\n", debug_count++);//////////////////
       
-      trace_header_kernel_t* kernel_cur = (trace_header_kernel_t*) malloc(kernel_header_size);
+      trace_header_kernel_t* kernel_cur =
+        (trace_header_kernel_t*) malloc(kernel_header_size);
       
-      printf("\t%d\n", debug_count++);//////////////////
+      //printf("\t%d\n", debug_count++);//////////////////
       
       if (!kernel_cur) {
         trace_last_error = "failed to allocate memory";
@@ -546,11 +638,11 @@ static inline double rttclock()
       
       res->kernel_accdat[kernel_count+1] = kernel_cur;
 
-      printf("\t%d\n", debug_count++);//////////////////
+      //printf("\t%d\n", debug_count++);//////////////////
       
       size_t kernel_data_size = header_deserialize(kernel_cur, accdat + offset);
       
-      printf("\t%d\n", debug_count++);//////////////////
+      //printf("\t%d\n", debug_count++);//////////////////
       
       if (kernel_data_size == 0) {
         trace_last_error = "failed to deserialize kernel header";
@@ -582,21 +674,27 @@ static inline double rttclock()
 
 
   static int trace_next(trace_t* t) {
-    uint64_t buf[TRACE_RECORD_SIZE(32)/8+1]; // mem space for addr_len == threads per warp
+    uint8_t buf[RECORD_SIZE_MAX]; // mem space for addr_len == threads per warp
     // end of file, this is not an error
-    if (! tracefile_read(t->tracefile, buf, 8)) {
+    if (! tracefile_read(t->tracefile, buf, RECORD_HEADER_SIZE)) {
       trace_last_error = NULL;
       return 1;
     }
-    
-    uint8_t ch = (buf[0] >> 56) & 0xFF;
 
-    if (! tracefile_read(t->tracefile, buf+1, RECORD_SIZE(ch) - 8)) {
+    /////////// need to move below inside trace_deserialize ////////////
+    uint32_t writemask = RECORD_GET_WRITEMASK(buf);
+    uint32_t activemask = RECORD_GET_ACTIVEMASK(buf);
+    uint32_t data_count = writemask ?
+      __builtin_popcount(writemask) :
+      __builtin_popcount(activemask);
+
+    if (! tracefile_read(t->tracefile, buf + RECORD_HEADER_SIZE,
+                         RECORD_SIZE(data_count) - RECORD_HEADER_SIZE)) {
       trace_last_error = "unable to read record";
       return 1;
     }
     
-    trace_deserialize((record_t*)buf, &t->record);
+    trace_deserialize(buf, t, data_count);
       
     trace_last_error = NULL;
     return 0;
@@ -608,7 +706,7 @@ static inline double rttclock()
       
       trace_header_kernel_t* kern_header = t->kernel_accdat[i_kern];
       for (uint64_t i_inst = 0; i_inst < kern_header->insts_count; i_inst++) {
-        free(kern_header->insts[i_inst].inst_filename);
+        free((char*)kern_header->insts[i_inst].filename);
       }
       
       free(kern_header);
@@ -647,9 +745,7 @@ static inline double rttclock()
       return 1;
     }
 
-    byte accdat_len_serialized[4] = {0};
-    int_serialize(accdat_len_serialized, 4, accdat_len);
-    if (! tracefile_write(tracefile, accdat_len_serialized, sizeof(uint32_t))) {
+    if (! tracefile_write(tracefile, &accdat_len, sizeof(accdat_len))) {
       trace_last_error = "header length write error";
       return 1;
     }
@@ -693,19 +789,6 @@ static inline double rttclock()
 
     return 0;
   }
-
-//  static int trace_write_record(tracefile_t tracefile, trace_record_t* record) {
-//  
-//    byte buf[TRACE_RECORD_SIZE(32)]; // mem space for addr_len == threads per warp
-//    trace_serialize(record, (record_t*)buf);
-//    if (! tracefile_write(tracefile, buf, RECORD_SIZE(record->addr_len))) {
-//      trace_last_error = "write error";
-//      return 1;
-//    }
-//  
-//    return 0;
-//  }
-
   
   static int trace_write_close(tracefile_t tracefile) {
     return tracefile_close(tracefile);
