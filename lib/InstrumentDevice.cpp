@@ -278,7 +278,7 @@ namespace cuprof {
  ***********************/
   
 
-    Value* getSm(IRBuilder<> irb) {
+    Value* getSm(IRBuilder<>& irb) {
       InlineAsm* sm_asm = InlineAsm::get(i32_fty,
                                          "mov.u32 $0, %smid;", "=r", false,
                                          InlineAsm::AsmDialect::AD_ATT );
@@ -286,28 +286,28 @@ namespace cuprof {
     }
 
   
-    Value* getWarpp(IRBuilder<> irb) {
+    Value* getWarpp(IRBuilder<>& irb) {
       InlineAsm* warpp_asm =InlineAsm::get(i32_fty,
                                            "mov.u32 $0, %warpid;", "=r", false,
                                            InlineAsm::AsmDialect::AD_ATT );
       return irb.CreateCall(warpp_asm);
     }
 
-    Value* getLane(IRBuilder<> irb) {
+    Value* getLane(IRBuilder<>& irb) {
       InlineAsm* laneid_asm = InlineAsm::get(i32_fty,
                                              "mov.u32 $0, %laneid;", "=r", false,
                                              InlineAsm::AsmDialect::AD_ATT );
       return irb.CreateCall(laneid_asm);
     }
 
-    Value* getGrid(IRBuilder<> irb) {
+    Value* getGrid(IRBuilder<>& irb) {
       InlineAsm* gridid_asm = InlineAsm::get(i64_fty,
                                              "mov.u64 $0, %gridid;", "=l", false,
                                              InlineAsm::AsmDialect::AD_ATT );
       return irb.CreateCall(gridid_asm);
     }
 
-    void getCta(IRBuilder<> irb, Value* (* cta)[3]) {
+    void getCta(IRBuilder<>& irb, Value* (* cta)[3]) {
 
       InlineAsm* cta_asm[3] = {
         InlineAsm::get(i32_fty, "mov.u32 $0, %ctaid.x;", "=r", false,
@@ -324,7 +324,7 @@ namespace cuprof {
       }
     }
 
-    Value* getCtaSerial(IRBuilder<> irb, Value* cta[3]) {
+    Value* getCtaSerial(IRBuilder<>& irb, Value* cta[3]) {
     
       // cta_serial: <32-bit: cta_x> <16-bit: cta_y> <16-bit: cta_z>
       Value* cta_serial_x = irb.CreateShl(cta[0], 32);
@@ -339,7 +339,7 @@ namespace cuprof {
       return cta_serial;
     }
 
-    Value* getCtaIndex(IRBuilder<> irb, Value* cta[3]) {
+    Value* getCtaIndex(IRBuilder<>& irb, Value* cta[3]) {
 
       
       InlineAsm* ncta_asm[2] = {
@@ -365,7 +365,7 @@ namespace cuprof {
       return irb.CreateTrunc(cta_i, i32_ty);;
     }
 
-    Value* getWarpv(IRBuilder<> irb) {
+    Value* getWarpv(IRBuilder<>& irb) {
 
       InlineAsm* tid_asm[3] = {
         InlineAsm::get(i32_fty, "mov.u32 $0, %tid.x;", "=r", false,
@@ -412,7 +412,7 @@ namespace cuprof {
     }
 
 
-    void insertFilterVolatile(IRBuilder<> irb, Value** to_be_traced_p,
+    void insertFilterVolatile(IRBuilder<>& irb, Value** to_be_traced_p,
                               TraceInfoValues* info, Value* sm, Value* warpp) {
     
       // apply volatile filters if exists
@@ -539,7 +539,7 @@ namespace cuprof {
               report_fatal_error("already instrumented!");
             } else if ( !callee_name.startswith("llvm.") ) {
               std::string error = "call to non-intrinsic: ";
-              error.append(callee_name);
+              error.append(callee_name.data());
               report_fatal_error(error.c_str());
             }
           } else {
